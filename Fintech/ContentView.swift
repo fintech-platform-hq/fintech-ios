@@ -8,17 +8,9 @@
 import SwiftUI
 
 struct ContentView: View {
-    var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
-    }
-}
+    let createTransactionViewModel: CreateTransactionViewModel
 
-#Preview {
-    ContentView()
+    var body: some View {
+        CreateTransactionView(viewModel: createTransactionViewModel)
+    }
 }

@@ -1,5 +1,12 @@
 import Foundation
 
+nonisolated protocol TransactionCreating: Sendable {
+    func createTransaction(
+        _ request: TransactionRequest,
+        idempotencyKey: UUID
+    ) async throws -> TransactionResponse
+}
+
 nonisolated struct TransactionService: Sendable {
     private let apiClient: APIClient
 
@@ -19,3 +26,5 @@ nonisolated struct TransactionService: Sendable {
         )
     }
 }
+
+extension TransactionService: TransactionCreating {}
