@@ -1,11 +1,12 @@
 import Foundation
 import Testing
+import UIKit
 @testable import Fintech
 
 @MainActor
 struct CreateTransactionViewModelTests {
     private let accountID = UUID(
-        uuidString: "00000000-0000-0000-0000-000000000001"
+        uuidString: "11111111-1111-4111-8111-111111111111"
     )!
     private let transactionID = UUID(
         uuidString: "6AEF7EC3-58FB-4AC7-8FF2-920E90CE0B4C"
@@ -24,50 +25,402 @@ struct CreateTransactionViewModelTests {
     )!
 
     @Test
-    func validAmountConvertsToMinorUnits() async throws {
+    func demoAccountUsesBackendCompatibleUUID() {
+        #expect(
+            DemoConfiguration.disposableTransactionAccountID.uuidString
+                == "11111111-1111-4111-8111-111111111111"
+        )
+    }
+
+    @Test
+    func typingDigitsFormatsBRLProgressively() {
+        let viewModel = makeViewModel()
+        let expectations = [
+            ("1", "R$ 0,01"),
+            ("12", "R$ 0,12"),
+            ("123", "R$ 1,23"),
+            ("1234", "R$ 12,34"),
+            ("123456", "R$ 1.234,56"),
+        ]
+
+        for (digits, formattedAmount) in expectations {
+            viewModel.updateAmountDigits(digits)
+
+            #expect(viewModel.amountDigits == digits)
+            #expect(viewModel.formattedAmountText == formattedAmount)
+        }
+    }
+
+    @Test
+    func rawDigitsMapDirectlyToRequestMinorUnits() async throws {
+        let expectations = [
+            ("1", 1),
+            ("12", 12),
+            ("123", 123),
+            ("123456", 123_456),
+        ]
+
+        for (digits, expectedAmountMinor) in expectations {
+            let service = TransactionServiceFake(
+                behavior: .succeed(
+                    makeResponse(amountMinor: expectedAmountMinor)
+                )
+            )
+            let viewModel = makeViewModel(service: service)
+            viewModel.updateAmountDigits(digits)
+
+            await viewModel.submit()
+
+            let invocation = try #require(await service.invocations.first)
+            #expect(invocation.request.amountMinor == expectedAmountMinor)
+            #expect(invocation.request.currency == "BRL")
+        }
+    }
+
+    @Test
+    func rawAmountDigitsAreLimitedToNine() {
+        let viewModel = makeViewModel()
+
+        viewModel.updateAmountDigits("123456789")
+        #expect(viewModel.amountDigits == "123456789")
+
+        viewModel.updateAmountDigits("1234567890")
+        #expect(viewModel.amountDigits == "123456789")
+    }
+
+    @Test
+    func selectingAllAndDeletingClearsAmount() throws {
+        let viewModel = makeViewModel()
+        viewModel.updateAmountDigits("123456")
+        let formattedAmount = viewModel.formattedAmountText
+        let selectedRange = try #require(
+            CreateTransactionInputNormalizer.rawDigitRange(
+                in: formattedAmount,
+                selectedUTF16Range: NSRange(
+                    location: 0,
+                    length: formattedAmount.utf16.count
+                ),
+                rawDigitCount: viewModel.amountDigits.count
+            )
+        )
+
+        viewModel.replaceAmountDigits(in: selectedRange, with: "")
+
+        #expect(viewModel.amountDigits.isEmpty)
+        #expect(viewModel.formattedAmountText.isEmpty)
+    }
+
+    @Test
+    func replacingSelectedRangeWithDigitsUpdatesRawAmount() throws {
+        let viewModel = makeViewModel()
+        viewModel.updateAmountDigits("123456")
+        let formattedAmount = viewModel.formattedAmountText
+        let selectedRange = try #require(
+            CreateTransactionInputNormalizer.rawDigitRange(
+                in: formattedAmount,
+                selectedUTF16Range: (formattedAmount as NSString)
+                    .range(of: "234"),
+                rawDigitCount: viewModel.amountDigits.count
+            )
+        )
+
+        viewModel.replaceAmountDigits(in: selectedRange, with: "9")
+
+        #expect(viewModel.amountDigits == "1956")
+        #expect(viewModel.formattedAmountText == "R$ 19,56")
+    }
+
+    @Test
+    func replacingSelectedRangeWithMixedPasteExtractsDigits() throws {
+        let viewModel = makeViewModel()
+        viewModel.updateAmountDigits("123456")
+        let formattedAmount = viewModel.formattedAmountText
+        let selectedRange = try #require(
+            CreateTransactionInputNormalizer.rawDigitRange(
+                in: formattedAmount,
+                selectedUTF16Range: (formattedAmount as NSString)
+                    .range(of: "234"),
+                rawDigitCount: viewModel.amountDigits.count
+            )
+        )
+
+        viewModel.replaceAmountDigits(
+            in: selectedRange,
+            with: "abc90,xyz"
+        )
+
+        #expect(viewModel.amountDigits == "19056")
+        #expect(viewModel.formattedAmountText == "R$ 190,56")
+    }
+
+    @Test
+    func rangeReplacementPreservesNineDigitLimitAndRetainedSuffix() {
+        let viewModel = makeViewModel()
+        viewModel.updateAmountDigits("123456789")
+
+        viewModel.replaceAmountDigits(in: 3..<4, with: "000")
+
+        #expect(viewModel.amountDigits == "123056789")
+        #expect(viewModel.amountDigits.count == 9)
+    }
+
+    @Test
+    func editedAmountCreatesCorrectMinorUnitRequest() async throws {
         let service = TransactionServiceFake(
-            behavior: .succeed(makeResponse(amountMinor: 15_000))
+            behavior: .succeed(makeResponse(amountMinor: 1_956))
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.amountText = "150.00"
+        viewModel.updateAmountDigits("123456")
+        viewModel.replaceAmountDigits(in: 1..<4, with: "9")
 
         await viewModel.submit()
 
         let invocation = try #require(await service.invocations.first)
-        #expect(invocation.request.amountMinor == 15_000)
-        #expect(invocation.request.currency == "BRL")
+        #expect(invocation.request.amountMinor == 1_956)
     }
 
     @Test
-    func commaDecimalConvertsToMinorUnits() async throws {
+    func mixedPasteExtractsDigitsAndCreatesExpectedAmount() async throws {
         let service = TransactionServiceFake(
-            behavior: .succeed(makeResponse(amountMinor: 15_000))
+            behavior: .succeed(makeResponse(amountMinor: 15_025))
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.amountText = "150,00"
+
+        viewModel.updateAmountDigits("abc150,25xyz")
+
+        #expect(viewModel.amountDigits == "15025")
+        #expect(viewModel.formattedAmountText == "R$ 150,25")
 
         await viewModel.submit()
 
         let invocation = try #require(await service.invocations.first)
-        #expect(invocation.request.amountMinor == 15_000)
+        #expect(invocation.request.amountMinor == 15_025)
     }
 
     @Test
-    func invalidAmountShowsValidationErrorAndDoesNotCallService() async {
+    func pasteWithoutDigitsPreservesPreviousAmount() {
+        let viewModel = makeViewModel()
+        viewModel.updateAmountDigits("123")
+
+        viewModel.updateAmountDigits("abc,xyz")
+
+        #expect(viewModel.amountDigits == "123")
+        #expect(viewModel.formattedAmountText == "R$ 1,23")
+    }
+
+    @Test
+    func pasteBeyondLimitKeepsFirstNineDigits() {
+        let viewModel = makeViewModel()
+
+        viewModel.updateAmountDigits("abc1234567890123xyz")
+
+        #expect(viewModel.amountDigits == "123456789")
+        #expect(viewModel.formattedAmountText == "R$ 1.234.567,89")
+    }
+
+    @Test
+    func removingLastRawDigitSupportsBackspaceState() {
+        let viewModel = makeViewModel()
+        viewModel.updateAmountDigits("1234")
+
+        viewModel.updateAmountDigits("123")
+
+        #expect(viewModel.amountDigits == "123")
+        #expect(viewModel.formattedAmountText == "R$ 1,23")
+    }
+
+    @Test
+    func descriptionBelowLimitRemainsUnchanged() {
+        let viewModel = makeViewModel()
+        let description = "Coffee with a client"
+
+        viewModel.updateDescriptionText(description)
+
+        #expect(viewModel.descriptionText == description)
+    }
+
+    @Test
+    func descriptionPreservesLineBreaks() {
+        let viewModel = makeViewModel()
+        let description = "Coffee\nwith a client\nafter lunch"
+
+        viewModel.updateDescriptionText(description)
+
+        #expect(viewModel.descriptionText == description)
+    }
+
+    @Test
+    func whitespaceOnlyNewlineInputIsIgnored() {
+        let viewModel = makeViewModel()
+        let description = String(repeating: "\n", count: 40)
+
+        viewModel.updateDescriptionText(description)
+
+        #expect(viewModel.descriptionText.isEmpty)
+    }
+
+    @Test
+    func whitespaceOnlySpacesAreIgnored() {
+        let viewModel = makeViewModel()
+
+        viewModel.updateDescriptionText("          ")
+
+        #expect(viewModel.descriptionText.isEmpty)
+    }
+
+    @Test
+    func firstPasteWithContentTrimsWhitespaceBoundaries() {
+        let viewModel = makeViewModel()
+
+        viewModel.updateDescriptionText("   Pagamento mercado   ")
+
+        #expect(viewModel.descriptionText == "Pagamento mercado")
+    }
+
+    @Test
+    func normalSpacesAndMultilineContentArePreserved() {
+        let viewModel = makeViewModel()
+        let description = "Mercado\nCompra semanal"
+
+        viewModel.updateDescriptionText("Pagamento mercado")
+        #expect(viewModel.descriptionText == "Pagamento mercado")
+
+        viewModel.updateDescriptionText(description)
+        #expect(viewModel.descriptionText == description)
+    }
+
+    @Test
+    func descriptionEditorUsesFixedBoundedHeightConfiguration() {
+        #expect(LimitedTextEditor.minimumVisibleLineCount == 4)
+        #expect(LimitedTextEditor.maximumVisibleLineCount == 4)
+        #expect(LimitedTextEditor.visibleLineCount == 4)
+        #expect(LimitedTextEditor.boundedHeight(for: 20) == 84)
+    }
+
+    @Test
+    func descriptionEditorContainerHeightIgnoresNewlineContent() {
+        let container = LimitedTextEditor.BoundedTextEditorContainer()
+        container.boundedHeight = 84
+        let initialIntrinsicHeight = container.intrinsicContentSize.height
+
+        container.textView.text = String(repeating: "\n", count: 255)
+        container.textView.layoutIfNeeded()
+
+        #expect(initialIntrinsicHeight == 84)
+        #expect(container.intrinsicContentSize.height == 84)
+        #expect(
+            container.sizeThatFits(
+                CGSize(
+                    width: 320,
+                    height: CGFloat.greatestFiniteMagnitude
+                )
+            ).height == 84
+        )
+        #expect(container.textView.isScrollEnabled)
+    }
+
+    @Test
+    func descriptionAcceptsExactly255Characters() {
+        let viewModel = makeViewModel()
+        let description = String(repeating: "a", count: 255)
+
+        viewModel.updateDescriptionText(description)
+
+        #expect(viewModel.descriptionText == description)
+        #expect(viewModel.descriptionText.count == 255)
+    }
+
+    @Test
+    func descriptionIsImmediatelyTruncatedTo255Characters() {
+        let viewModel = makeViewModel()
+        let overLimitDescription = String(repeating: "a", count: 256)
+
+        viewModel.updateDescriptionText(overLimitDescription)
+
+        #expect(viewModel.descriptionText.count == 255)
+        #expect(viewModel.descriptionText == String(repeating: "a", count: 255))
+    }
+
+    @Test
+    func pastedMultilineDescriptionIsLimitedWithoutRemovingLineBreaks() {
+        let viewModel = makeViewModel()
+        let line = "A line of pasted text\n"
+        let pastedDescription = String(repeating: line, count: 20)
+
+        viewModel.updateDescriptionText(pastedDescription)
+
+        #expect(viewModel.descriptionText.count == 255)
+        #expect(
+            viewModel.descriptionText
+                == String(pastedDescription.prefix(255))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        #expect(viewModel.descriptionText.contains("\n"))
+    }
+
+    @Test
+    func submitTrimsDescriptionBoundaries() async throws {
         let service = TransactionServiceFake(
             behavior: .succeed(makeResponse())
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.amountText = "12.345"
+        viewModel.updateAmountDigits("4200")
+        viewModel.updateDescriptionText("Pagamento mercado")
+        viewModel.updateDescriptionText("Pagamento mercado   \n")
 
         await viewModel.submit()
 
-        #expect(viewModel.state == .failure(.invalidAmount))
-        #expect(
-            CreateTransactionDisplayError.invalidAmount.message
-                == "Enter a valid BRL amount with no more than two decimal places."
+        let invocation = try #require(await service.invocations.first)
+        #expect(invocation.request.description == "Pagamento mercado")
+    }
+
+    @Test
+    func leadingWhitespaceIsTrimmedBeforeRequestCreation() async throws {
+        let service = TransactionServiceFake(
+            behavior: .succeed(makeResponse())
         )
-        #expect(await service.invocations.isEmpty)
+        let viewModel = makeViewModel(service: service)
+        viewModel.updateAmountDigits("4200")
+
+        viewModel.updateDescriptionText("   Pagamento mercado")
+        await viewModel.submit()
+
+        let invocation = try #require(await service.invocations.first)
+        #expect(invocation.request.description == "Pagamento mercado")
+    }
+
+    @Test
+    func multilineDescriptionPreservesContentWhileTrimmingEdges() async throws {
+        let service = TransactionServiceFake(
+            behavior: .succeed(makeResponse())
+        )
+        let viewModel = makeViewModel(service: service)
+        viewModel.updateAmountDigits("4200")
+
+        viewModel.updateDescriptionText(
+            "\n\nmercado\ncompra semanal\n\n"
+        )
+        await viewModel.submit()
+
+        let invocation = try #require(await service.invocations.first)
+        #expect(
+            invocation.request.description == "mercado\ncompra semanal"
+        )
+    }
+
+    @Test
+    func emptyDescriptionRemainsOptionalAtSubmit() async throws {
+        let service = TransactionServiceFake(
+            behavior: .succeed(makeResponse())
+        )
+        let viewModel = makeViewModel(service: service)
+        viewModel.updateAmountDigits("4200")
+        viewModel.updateDescriptionText(" \n ")
+
+        await viewModel.submit()
+
+        let invocation = try #require(await service.invocations.first)
+        #expect(invocation.request.description == nil)
     }
 
     @Test
@@ -76,7 +429,7 @@ struct CreateTransactionViewModelTests {
             behavior: .succeed(makeResponse())
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.amountText = "0,00"
+        viewModel.updateAmountDigits("0")
 
         await viewModel.submit()
 
@@ -85,16 +438,15 @@ struct CreateTransactionViewModelTests {
     }
 
     @Test
-    func negativeAmountIsRejectedLocally() async {
+    func emptyAmountDoesNotCallService() async {
         let service = TransactionServiceFake(
             behavior: .succeed(makeResponse())
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.amountText = "-1.00"
 
         await viewModel.submit()
 
-        #expect(viewModel.state == .failure(.negativeAmount))
+        #expect(viewModel.state == .failure(.invalidAmount))
         #expect(await service.invocations.isEmpty)
     }
 
@@ -104,7 +456,7 @@ struct CreateTransactionViewModelTests {
             behavior: .suspendThenSucceed(makeResponse())
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.amountText = "10.00"
+        viewModel.updateAmountDigits("1000")
 
         let firstSubmission = Task {
             await viewModel.submit()
@@ -124,11 +476,74 @@ struct CreateTransactionViewModelTests {
             behavior: .succeed(makeResponse())
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.amountText = "42"
+        viewModel.updateAmountDigits("42")
 
         await viewModel.submit()
 
         #expect(viewModel.state == .success(transactionID: transactionID))
+        #expect(viewModel.successSnapshot?.transactionID == transactionID)
+        #expect(viewModel.state.primaryActionTitle == "Create Another")
+        #expect(!viewModel.state.isPrimaryActionDisabled)
+    }
+
+    @Test
+    func successSnapshotUsesTheNormalizedSubmittedDescription() async throws {
+        let service = TransactionServiceFake(
+            behavior: .succeed(makeResponse())
+        )
+        let viewModel = makeViewModel(service: service)
+        viewModel.transactionType = .credit
+        viewModel.updateAmountDigits("1500")
+        viewModel.updateDescriptionText("Mercado\nCompra semanal")
+        viewModel.updateDescriptionText(
+            "Mercado\nCompra semanal   \n"
+        )
+
+        await viewModel.submit()
+
+        let snapshot = try #require(viewModel.successSnapshot)
+        #expect(snapshot.transactionID == transactionID)
+        #expect(snapshot.amountMinor == 1_500)
+        #expect(snapshot.type == .credit)
+        #expect(snapshot.description == "Mercado\nCompra semanal")
+    }
+
+    @Test
+    func createAnotherResetsEntryAndGeneratesFreshOperation() async {
+        let service = TransactionServiceFake(
+            behavior: .succeed(makeResponse())
+        )
+        let viewModel = makeViewModel(service: service)
+        viewModel.transactionType = .credit
+        viewModel.updateAmountDigits("1500")
+        viewModel.updateDescriptionText("First transaction")
+
+        await viewModel.submit()
+        #expect(viewModel.state.isSuccess)
+
+        viewModel.startAnotherTransaction()
+
+        #expect(viewModel.amountDigits.isEmpty)
+        #expect(viewModel.descriptionText.isEmpty)
+        #expect(viewModel.successSnapshot == nil)
+        #expect(viewModel.transactionType == .credit)
+        #expect(viewModel.state == .idle)
+        #expect(viewModel.state.primaryActionTitle == "Create Transaction")
+
+        viewModel.updateAmountDigits("2500")
+        await viewModel.submit()
+
+        let invocations = await service.invocations
+        #expect(invocations.count == 2)
+        #expect(invocations[0].idempotencyKey == idempotencyKey)
+        #expect(invocations[1].idempotencyKey == secondIdempotencyKey)
+        #expect(invocations[0].request.clientMutationId == clientMutationID)
+        #expect(
+            invocations[1].request.clientMutationId
+                == secondClientMutationID
+        )
+        #expect(invocations[1].request.amountMinor == 2_500)
+        #expect(invocations[1].request.type == .credit)
     }
 
     @Test
@@ -140,7 +555,7 @@ struct CreateTransactionViewModelTests {
             )
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.amountText = "42.00"
+        viewModel.updateAmountDigits("4200")
 
         await viewModel.submit()
 
@@ -164,7 +579,7 @@ struct CreateTransactionViewModelTests {
             )
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.amountText = "15.00"
+        viewModel.updateAmountDigits("1500")
 
         await viewModel.submit()
         await viewModel.submit()
@@ -184,10 +599,10 @@ struct CreateTransactionViewModelTests {
             )
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.amountText = "15.00"
+        viewModel.updateAmountDigits("1500")
 
         await viewModel.submit()
-        viewModel.amountText = "16.00"
+        viewModel.updateAmountDigits("1600")
         await viewModel.submit()
 
         let invocations = await service.invocations
@@ -202,7 +617,7 @@ struct CreateTransactionViewModelTests {
     }
 
     private func makeViewModel(
-        service: TransactionServiceFake
+        service: TransactionServiceFake? = nil
     ) -> CreateTransactionViewModel {
         var generatedUUIDs = [
             idempotencyKey,
@@ -212,7 +627,9 @@ struct CreateTransactionViewModelTests {
         ]
 
         return CreateTransactionViewModel(
-            service: service,
+            service: service ?? TransactionServiceFake(
+                behavior: .succeed(makeResponse())
+            ),
             disposableDemoAccountID: accountID,
             makeUUID: { generatedUUIDs.removeFirst() },
             now: { Date(timeIntervalSince1970: 1_785_436_800) }

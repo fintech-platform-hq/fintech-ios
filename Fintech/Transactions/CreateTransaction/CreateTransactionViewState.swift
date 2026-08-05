@@ -1,5 +1,12 @@
 import Foundation
 
+nonisolated struct CreateTransactionSuccessSnapshot: Equatable, Sendable {
+    let transactionID: UUID
+    let amountMinor: Int
+    let type: TransactionType
+    let description: String?
+}
+
 nonisolated enum CreateTransactionViewState: Equatable, Sendable {
     case idle
     case validating
@@ -28,7 +35,6 @@ nonisolated enum CreateTransactionViewState: Equatable, Sendable {
 nonisolated enum CreateTransactionDisplayError: Error, Equatable, Sendable {
     case invalidAmount
     case zeroAmount
-    case negativeAmount
     case idempotencyConflict(message: String?)
     case requestRejected(message: String)
     case networkUnavailable
@@ -38,11 +44,9 @@ nonisolated enum CreateTransactionDisplayError: Error, Equatable, Sendable {
     var message: String {
         switch self {
         case .invalidAmount:
-            "Enter a valid BRL amount with no more than two decimal places."
+            "Enter an amount."
         case .zeroAmount:
             "The amount must be greater than zero."
-        case .negativeAmount:
-            "The amount cannot be negative."
         case let .idempotencyConflict(message):
             message ?? "This submission conflicts with an earlier transaction request."
         case let .requestRejected(message):
