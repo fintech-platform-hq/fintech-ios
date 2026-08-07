@@ -24,6 +24,12 @@ View
   - amount
   - type (expense/income)
   - optional description
+- Visual amount sign is presentation only:
+  - Expense renders `-R$`
+  - Income renders `+R$`
+  - `amountMinor` stays positive in both cases
+- Retry of the same logical submission reuses the same idempotency state
+- Editing the form after a change or failure starts a new logical operation when applicable
 
 - Generate:
   - Idempotency-Key (UUID)

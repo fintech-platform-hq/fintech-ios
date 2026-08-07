@@ -76,35 +76,35 @@ Omitting an optional field and sending it as `null` produce the same server-side
 
 ### Response JSON
 
-The controller returns the PostgreSQL row directly. The expected wire keys are snake_case and both nullable fields are returned:
+The controller returns the PostgreSQL row directly. The iOS client contract and `APIClientTests` use camelCase response keys with both nullable fields returned:
 
 ```json
 {
   "id": "6aef7ec3-58fb-4ac7-8ff2-920e90ce0b4c",
-  "account_id": "00000000-0000-0000-0000-000000000001",
-  "category_id": null,
+  "accountId": "00000000-0000-0000-0000-000000000001",
+  "categoryId": null,
   "type": "income",
-  "amount_minor": 15000,
+  "amountMinor": 15000,
   "currency": "BRL",
   "description": null,
-  "occurred_at": "2026-07-30T18:00:00.000Z",
-  "created_at": "2026-07-30T18:00:01.421Z"
+  "occurredAt": "2026-07-30T18:00:00.000Z",
+  "createdAt": "2026-07-30T18:00:01.421Z"
 }
 ```
 
 | JSON field | Wire type | Proposed Swift property |
 |---|---|---|
 | `id` | UUID string | `id: UUID` |
-| `account_id` | UUID string | `accountId: UUID` |
-| `category_id` | UUID string or `null` | `categoryId: UUID?` |
+| `accountId` | UUID string | `accountId: UUID` |
+| `categoryId` | UUID string or `null` | `categoryId: UUID?` |
 | `type` | `"expense"` or `"income"` | `type: TransactionType` |
-| `amount_minor` | integer | `amountMinor: Int` |
+| `amountMinor` | integer | `amountMinor: Int` |
 | `currency` | string | `currency: String` |
 | `description` | string or `null` | `description: String?` |
-| `occurred_at` | ISO-formatted timestamp string after JSON serialization | `occurredAt: Date` |
-| `created_at` | ISO-formatted timestamp string after JSON serialization | `createdAt: Date` |
+| `occurredAt` | ISO-formatted timestamp string after JSON serialization | `occurredAt: Date` |
+| `createdAt` | ISO-formatted timestamp string after JSON serialization | `createdAt: Date` |
 
-The proposed model uses explicit `CodingKeys`; global snake-case conversion is unnecessary for the camelCase request and could hide contract mistakes.
+The proposed model uses explicit `CodingKeys`; global snake-case conversion is unnecessary for the camelCase request and response and could hide contract mistakes.
 
 ### Current error format
 
@@ -150,7 +150,7 @@ Some database-derived `400` and `409` exceptions use Nest's generic message inst
 | Authentication | No authentication or authorization guard | OpenAPI requires bearer JWT; transaction docs require `Authorization` and describe `403` |
 | Request example | `clientMutationId` is required by the DTO | Backend README examples omit it and therefore do not satisfy current validation |
 | Idempotency key | Database requires UUID | Backend README uses `transaction-example-001`, which is not a UUID |
-| Response casing | Direct database row uses snake_case | OpenAPI and transaction docs specify camelCase |
+| Response casing | Current iOS client contract and APIClientTests use camelCase | Older OpenAPI and transaction docs still show snake_case |
 | Response fields | Includes `category_id` and `description`, including `null` | OpenAPI omits `categoryId` entirely and does not require `description`; examples omit category |
 | Error body | Nest envelope uses `statusCode`, `message`, and `error`; validation messages may be an array | OpenAPI/docs specify `{ "code", "message" }` |
 | Amount validation | DTO accepts any integer; database enforces `amount_minor > 0` | OpenAPI declares `minimum: 1` and docs describe request validation |
@@ -175,7 +175,7 @@ Date encoding must be centralized and covered by an exact JSON test. The approve
 
 ## Response model
 
-`TransactionResponse` is a value type conforming to `Decodable`, `Equatable`, `Identifiable`, and `Sendable`. It maps the nine implemented snake_case fields through explicit `CodingKeys`.
+`TransactionResponse` is a value type conforming to `Decodable`, `Equatable`, `Identifiable`, and `Sendable`. It maps the nine implemented camelCase fields through explicit `CodingKeys`.
 
 Use one shared, explicitly configured date-decoding strategy for `occurred_at` and `created_at`, including fractional-second and non-fractional RFC 3339 fixtures if both formats are approved. Do not make required backend fields optional merely to hide decoding failures.
 

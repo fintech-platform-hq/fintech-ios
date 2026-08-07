@@ -23,10 +23,8 @@ final class FintechUITests: XCTestCase {
         )
 
         let amountField = app.textFields["createTransaction.amount"]
-        let typePicker = app.descendants(matching: .any)[
-            "createTransaction.type"
-        ]
-        let incomeSegment = app.buttons["Income"]
+        let typePicker = app.segmentedControls["createTransaction.type"]
+        let incomeSegment = typePicker.buttons["Income"]
         let descriptionField = app.textViews[
             "createTransaction.description"
         ]
@@ -63,11 +61,17 @@ final class FintechUITests: XCTestCase {
 
         incomeSegment.tap()
 
+        let updatedAmountField = app.textFields["createTransaction.amount"]
+        let amountUpdated = expectation(
+            for: NSPredicate(format: "value == %@", "+R$ 15,02"),
+            evaluatedWith: updatedAmountField
+        )
+        wait(for: [amountUpdated], timeout: 10)
         XCTAssertTrue(keyboard.waitForNonExistence(timeout: 2))
         XCTAssertTrue(submitButton.exists)
         XCTAssertTrue(submitButton.isHittable)
         XCTAssertEqual(
-            amountField.value as? String,
+            updatedAmountField.value as? String,
             "+R$ 15,02"
         )
 
