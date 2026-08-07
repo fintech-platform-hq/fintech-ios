@@ -36,11 +36,11 @@ struct CreateTransactionViewModelTests {
     func typingDigitsFormatsBRLProgressively() {
         let viewModel = makeViewModel()
         let expectations = [
-            ("1", "R$ 0,01"),
-            ("12", "R$ 0,12"),
-            ("123", "R$ 1,23"),
-            ("1234", "R$ 12,34"),
-            ("123456", "R$ 1.234,56"),
+            ("1", "-R$ 0,01"),
+            ("12", "-R$ 0,12"),
+            ("123", "-R$ 1,23"),
+            ("1234", "-R$ 12,34"),
+            ("123456", "-R$ 1.234,56"),
         ]
 
         for (digits, formattedAmount) in expectations {
@@ -49,6 +49,58 @@ struct CreateTransactionViewModelTests {
             #expect(viewModel.amountDigits == digits)
             #expect(viewModel.formattedAmountText == formattedAmount)
         }
+    }
+
+    @Test
+    func expenseShowsNegativeSignAndKeepsPositiveMinorUnits() async throws {
+        let service = TransactionServiceFake(
+            behavior: .succeed(makeResponse(amountMinor: 10_000))
+        )
+        let viewModel = makeViewModel(service: service)
+        viewModel.updateAmountDigits("10000")
+
+        #expect(viewModel.formattedAmountText == "-R$ 100,00")
+
+        await viewModel.submit()
+
+        let invocation = try #require(await service.invocations.first)
+        #expect(invocation.request.type == .expense)
+        #expect(invocation.request.amountMinor == 10_000)
+        #expect(invocation.request.amountMinor > 0)
+    }
+
+    @Test
+    func incomeShowsPositiveSignAndKeepsPositiveMinorUnits() async throws {
+        let service = TransactionServiceFake(
+            behavior: .succeed(makeResponse(amountMinor: 10_000))
+        )
+        let viewModel = makeViewModel(service: service)
+        viewModel.transactionType = .income
+        viewModel.updateAmountDigits("10000")
+
+        #expect(viewModel.formattedAmountText == "+R$ 100,00")
+
+        await viewModel.submit()
+
+        let invocation = try #require(await service.invocations.first)
+        #expect(invocation.request.type == .income)
+        #expect(invocation.request.amountMinor == 10_000)
+        #expect(invocation.request.amountMinor > 0)
+    }
+
+    @Test
+    func emptyExpenseShowsNegativeZero() {
+        let viewModel = makeViewModel()
+
+        #expect(viewModel.formattedAmountText == "-R$ 0,00")
+    }
+
+    @Test
+    func emptyIncomeShowsPositiveZero() {
+        let viewModel = makeViewModel()
+        viewModel.transactionType = .income
+
+        #expect(viewModel.formattedAmountText == "+R$ 0,00")
     }
 
     @Test
@@ -75,6 +127,57 @@ struct CreateTransactionViewModelTests {
             #expect(invocation.request.amountMinor == expectedAmountMinor)
             #expect(invocation.request.currency == "BRL")
         }
+    }
+
+    @Test
+    func selectedTransactionTypeIsUsedForTheLogicalOperation() async throws {
+        let service = TransactionServiceFake(
+            behavior: .succeed(makeResponse())
+        )
+        let viewModel = makeViewModel(service: service)
+        viewModel.updateAmountDigits("1500")
+
+        await viewModel.submit()
+        let expenseInvocation = try #require(await service.invocations.first)
+        #expect(expenseInvocation.request.type == .expense)
+
+        viewModel.startAnotherTransaction()
+        viewModel.transactionType = .income
+        viewModel.updateAmountDigits("1500")
+        await viewModel.submit()
+
+        let invocations = await service.invocations
+        #expect(invocations.count == 2)
+        #expect(invocations[1].request.type == .income)
+    }
+
+    @Test
+    func switchingExpenseToIncomePreservesAmountDigitsAndFlipsSign() {
+        let viewModel = makeViewModel()
+        viewModel.updateAmountDigits("15000")
+
+        #expect(viewModel.amountDigits == "15000")
+        #expect(viewModel.formattedAmountText == "-R$ 150,00")
+
+        viewModel.transactionType = .income
+
+        #expect(viewModel.amountDigits == "15000")
+        #expect(viewModel.formattedAmountText == "+R$ 150,00")
+    }
+
+    @Test
+    func switchingIncomeToExpensePreservesAmountDigitsAndFlipsSign() {
+        let viewModel = makeViewModel()
+        viewModel.transactionType = .income
+        viewModel.updateAmountDigits("15000")
+
+        #expect(viewModel.amountDigits == "15000")
+        #expect(viewModel.formattedAmountText == "+R$ 150,00")
+
+        viewModel.transactionType = .expense
+
+        #expect(viewModel.amountDigits == "15000")
+        #expect(viewModel.formattedAmountText == "-R$ 150,00")
     }
 
     @Test
@@ -107,7 +210,7 @@ struct CreateTransactionViewModelTests {
         viewModel.replaceAmountDigits(in: selectedRange, with: "")
 
         #expect(viewModel.amountDigits.isEmpty)
-        #expect(viewModel.formattedAmountText.isEmpty)
+        #expect(viewModel.formattedAmountText == "-R$ 0,00")
     }
 
     @Test
@@ -127,7 +230,7 @@ struct CreateTransactionViewModelTests {
         viewModel.replaceAmountDigits(in: selectedRange, with: "9")
 
         #expect(viewModel.amountDigits == "1956")
-        #expect(viewModel.formattedAmountText == "R$ 19,56")
+        #expect(viewModel.formattedAmountText == "-R$ 19,56")
     }
 
     @Test
@@ -150,7 +253,7 @@ struct CreateTransactionViewModelTests {
         )
 
         #expect(viewModel.amountDigits == "19056")
-        #expect(viewModel.formattedAmountText == "R$ 190,56")
+        #expect(viewModel.formattedAmountText == "-R$ 190,56")
     }
 
     @Test
@@ -189,7 +292,7 @@ struct CreateTransactionViewModelTests {
         viewModel.updateAmountDigits("abc150,25xyz")
 
         #expect(viewModel.amountDigits == "15025")
-        #expect(viewModel.formattedAmountText == "R$ 150,25")
+        #expect(viewModel.formattedAmountText == "-R$ 150,25")
 
         await viewModel.submit()
 
@@ -205,7 +308,7 @@ struct CreateTransactionViewModelTests {
         viewModel.updateAmountDigits("abc,xyz")
 
         #expect(viewModel.amountDigits == "123")
-        #expect(viewModel.formattedAmountText == "R$ 1,23")
+        #expect(viewModel.formattedAmountText == "-R$ 1,23")
     }
 
     @Test
@@ -215,7 +318,7 @@ struct CreateTransactionViewModelTests {
         viewModel.updateAmountDigits("abc1234567890123xyz")
 
         #expect(viewModel.amountDigits == "123456789")
-        #expect(viewModel.formattedAmountText == "R$ 1.234.567,89")
+        #expect(viewModel.formattedAmountText == "-R$ 1.234.567,89")
     }
 
     @Test
@@ -226,7 +329,7 @@ struct CreateTransactionViewModelTests {
         viewModel.updateAmountDigits("123")
 
         #expect(viewModel.amountDigits == "123")
-        #expect(viewModel.formattedAmountText == "R$ 1,23")
+        #expect(viewModel.formattedAmountText == "-R$ 1,23")
     }
 
     @Test
@@ -492,7 +595,7 @@ struct CreateTransactionViewModelTests {
             behavior: .succeed(makeResponse())
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.transactionType = .credit
+        viewModel.transactionType = .income
         viewModel.updateAmountDigits("1500")
         viewModel.updateDescriptionText("Mercado\nCompra semanal")
         viewModel.updateDescriptionText(
@@ -504,7 +607,7 @@ struct CreateTransactionViewModelTests {
         let snapshot = try #require(viewModel.successSnapshot)
         #expect(snapshot.transactionID == transactionID)
         #expect(snapshot.amountMinor == 1_500)
-        #expect(snapshot.type == .credit)
+        #expect(snapshot.type == .income)
         #expect(snapshot.description == "Mercado\nCompra semanal")
     }
 
@@ -514,7 +617,7 @@ struct CreateTransactionViewModelTests {
             behavior: .succeed(makeResponse())
         )
         let viewModel = makeViewModel(service: service)
-        viewModel.transactionType = .credit
+        viewModel.transactionType = .income
         viewModel.updateAmountDigits("1500")
         viewModel.updateDescriptionText("First transaction")
 
@@ -526,7 +629,7 @@ struct CreateTransactionViewModelTests {
         #expect(viewModel.amountDigits.isEmpty)
         #expect(viewModel.descriptionText.isEmpty)
         #expect(viewModel.successSnapshot == nil)
-        #expect(viewModel.transactionType == .credit)
+        #expect(viewModel.transactionType == .income)
         #expect(viewModel.state == .idle)
         #expect(viewModel.state.primaryActionTitle == "Create Transaction")
 
@@ -543,7 +646,7 @@ struct CreateTransactionViewModelTests {
                 == secondClientMutationID
         )
         #expect(invocations[1].request.amountMinor == 2_500)
-        #expect(invocations[1].request.type == .credit)
+        #expect(invocations[1].request.type == .income)
     }
 
     @Test
@@ -643,7 +746,7 @@ struct CreateTransactionViewModelTests {
             id: transactionID,
             accountId: accountID,
             categoryId: nil,
-            type: .debit,
+            type: .expense,
             amountMinor: amountMinor,
             currency: "BRL",
             description: nil,

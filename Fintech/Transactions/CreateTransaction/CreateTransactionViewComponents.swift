@@ -17,6 +17,7 @@ struct CreateTransactionFormSections: View {
             LabeledContent {
                 CurrencyAmountTextField(
                     digits: $amountDigits,
+                    transactionType: transactionType,
                     replaceDigits: replaceAmountDigits
                 )
                 .frame(maxWidth: .infinity)
@@ -24,11 +25,14 @@ struct CreateTransactionFormSections: View {
                 Text("Amount")
             }
 
-            Picker("Type", selection: $transactionType) {
-                Text("Debit").tag(TransactionType.debit)
-                Text("Credit").tag(TransactionType.credit)
+            Picker("Transaction type", selection: $transactionType) {
+                Text("Expense").tag(TransactionType.expense)
+                Text("Income").tag(TransactionType.income)
             }
             .pickerStyle(.segmented)
+            .accessibilityLabel("Transaction type")
+            .accessibilityValue("\(transactionType.displayName) selected")
+            .accessibilityHint("Choose whether this transaction is money spent or money received.")
             .accessibilityIdentifier("createTransaction.type")
         } footer: {
             if let amountValidationError {
@@ -135,7 +139,7 @@ struct TransactionSuccessSummaryView: View {
             }
 
             LabeledContent("Type") {
-                Text(snapshot.type == .debit ? "Debit" : "Credit")
+                Text(snapshot.type.displayName)
             }
 
             if let description = snapshot.description {

@@ -28,6 +28,14 @@ struct TransactionServiceTests {
         #expect(request.currency == "BRL")
     }
 
+    @Test
+    func transactionTypesExposeOnlyExpenseAndIncomeWireValues() {
+        #expect(
+            Set(TransactionType.allCases.map(\.rawValue))
+                == Set(["expense", "income"])
+        )
+    }
+
     private func makeRequest(
         amountMinor: Int = 1,
         currency: String = "BRL"
@@ -35,7 +43,7 @@ struct TransactionServiceTests {
         try TransactionRequest(
             accountId: accountId,
             categoryId: nil,
-            type: .debit,
+            type: .expense,
             amountMinor: amountMinor,
             currency: currency,
             description: nil,

@@ -29,7 +29,7 @@ final class ProductionTransactionSmokeTests: XCTestCase {
         let request = try TransactionRequest(
             accountId: accountId,
             categoryId: nil,
-            type: .credit,
+            type: .income,
             amountMinor: 1,
             currency: "BRL",
             description: "Opt-in iOS transaction networking smoke test",

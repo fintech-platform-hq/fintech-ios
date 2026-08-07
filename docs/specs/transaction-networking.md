@@ -1,6 +1,6 @@
 # Transaction Networking Specification
 
-Status: proposed for human approval before production implementation
+Status: client contract updated; production deployment must match before live use
 
 Last source inspection: 2026-07-31
 
@@ -25,7 +25,7 @@ This document records conflicts between the backend implementation, the backend 
 
 No production request was made during discovery. The verified behavior below is source-verified against the accessible repositories, not live-deployment-verified.
 
-## Verified backend contract
+## Expected backend contract
 
 ### Endpoint and headers
 
@@ -44,26 +44,26 @@ The service checks only that `Idempotency-Key` is nonempty, but the PostgreSQL c
 
 ### Request JSON
 
-The current backend DTO accepts only the following camelCase keys because global validation uses `whitelist: true` and `forbidNonWhitelisted: true`:
+The backend deployment must accept the following camelCase keys because global validation uses `whitelist: true` and `forbidNonWhitelisted: true`:
 
 | JSON field | Required | Implemented validation | Proposed Swift property |
 |---|---:|---|---|
 | `accountId` | yes | UUID string | `accountId: UUID` |
 | `categoryId` | no | UUID string when present; `null` is accepted | `categoryId: UUID?` |
-| `type` | yes | `"debit"` or `"credit"` | `type: TransactionType` |
+| `type` | yes | `"expense"` or `"income"` | `type: TransactionType` |
 | `amountMinor` | yes | integer in the DTO; database requires greater than zero | `amountMinor: Int` |
 | `currency` | yes | exactly three uppercase ASCII letters | `currency: String` |
 | `description` | no | string when present; `null` is accepted; no implemented length limit | `description: String?` |
 | `occurredAt` | yes | DTO checks only that it is a string; PostgreSQL must parse it as `timestamptz` | `occurredAt: Date` with an approved RFC 3339 encoding strategy |
 | `clientMutationId` | yes | UUID string; included in the idempotency request hash but not persisted in the transaction row | `clientMutationId: UUID` |
 
-Example matching the current implementation:
+Example required by the current iOS implementation:
 
 ```json
 {
   "accountId": "00000000-0000-0000-0000-000000000001",
   "categoryId": null,
-  "type": "credit",
+  "type": "income",
   "amountMinor": 15000,
   "currency": "BRL",
   "description": null,
@@ -76,14 +76,14 @@ Omitting an optional field and sending it as `null` produce the same server-side
 
 ### Response JSON
 
-The controller returns the PostgreSQL row directly. The implemented wire keys are snake_case and both nullable fields are returned:
+The controller returns the PostgreSQL row directly. The expected wire keys are snake_case and both nullable fields are returned:
 
 ```json
 {
   "id": "6aef7ec3-58fb-4ac7-8ff2-920e90ce0b4c",
   "account_id": "00000000-0000-0000-0000-000000000001",
   "category_id": null,
-  "type": "credit",
+  "type": "income",
   "amount_minor": 15000,
   "currency": "BRL",
   "description": null,
@@ -97,7 +97,7 @@ The controller returns the PostgreSQL row directly. The implemented wire keys ar
 | `id` | UUID string | `id: UUID` |
 | `account_id` | UUID string | `accountId: UUID` |
 | `category_id` | UUID string or `null` | `categoryId: UUID?` |
-| `type` | `"debit"` or `"credit"` | `type: TransactionType` |
+| `type` | `"expense"` or `"income"` | `type: TransactionType` |
 | `amount_minor` | integer | `amountMinor: Int` |
 | `currency` | string | `currency: String` |
 | `description` | string or `null` | `description: String?` |
@@ -164,7 +164,7 @@ The domain definition also mentions decimal money in one invariant and data-mode
 
 ## Request model
 
-`TransactionRequest` is a value type conforming to `Encodable`, `Equatable`, and `Sendable`. It owns the exact eight fields listed above. `TransactionType` is a `String`, `Codable`, `Sendable` enum with only `debit` and `credit`.
+`TransactionRequest` is a value type conforming to `Encodable`, `Equatable`, and `Sendable`. It owns the exact eight fields listed above. `TransactionType` is a `String`, `Codable`, `Sendable` enum with only `expense` and `income`.
 
 The initializer should reject locally knowable invariants that are already part of the intended contract:
 

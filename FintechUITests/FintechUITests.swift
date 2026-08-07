@@ -26,6 +26,7 @@ final class FintechUITests: XCTestCase {
         let typePicker = app.descendants(matching: .any)[
             "createTransaction.type"
         ]
+        let incomeSegment = app.buttons["Income"]
         let descriptionField = app.textViews[
             "createTransaction.description"
         ]
@@ -33,6 +34,7 @@ final class FintechUITests: XCTestCase {
 
         XCTAssertTrue(amountField.exists)
         XCTAssertTrue(typePicker.exists)
+        XCTAssertTrue(incomeSegment.exists)
         XCTAssertTrue(descriptionField.exists)
         XCTAssertTrue(submitButton.exists)
         XCTAssertTrue(submitButton.isHittable)
@@ -50,23 +52,23 @@ final class FintechUITests: XCTestCase {
         amountField.typeText("abc150,25xyz")
         XCTAssertEqual(
             amountField.value as? String,
-            "R$ 150,25"
+            "-R$ 150,25"
         )
 
         amountField.typeText(XCUIKeyboardKey.delete.rawValue)
         XCTAssertEqual(
             amountField.value as? String,
-            "R$ 15,02"
+            "-R$ 15,02"
         )
 
-        typePicker.tap()
+        incomeSegment.tap()
 
         XCTAssertTrue(keyboard.waitForNonExistence(timeout: 2))
         XCTAssertTrue(submitButton.exists)
         XCTAssertTrue(submitButton.isHittable)
         XCTAssertEqual(
             amountField.value as? String,
-            "R$ 15,02"
+            "+R$ 15,02"
         )
 
         descriptionField.tap()

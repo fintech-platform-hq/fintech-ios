@@ -65,7 +65,7 @@ import SwiftUI
                     uuidString: "6AEF7EC3-58FB-4AC7-8FF2-920E90CE0B4C"
                 )!,
                 amountMinor: 15_000,
-                type: .debit,
+                type: .expense,
                 description: "Mercado\nCompra semanal"
             )
         )

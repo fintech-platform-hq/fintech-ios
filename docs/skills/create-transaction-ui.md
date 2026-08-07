@@ -22,7 +22,7 @@ View
 
 - Form with:
   - amount
-  - type (debit/credit)
+  - type (expense/income)
   - optional description
 
 - Generate:

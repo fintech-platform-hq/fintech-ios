@@ -4,6 +4,7 @@ import UIKit
 struct CurrencyAmountTextField: UIViewRepresentable {
     @Environment(\.isEnabled) private var isEnabled
     @Binding var digits: String
+    let transactionType: TransactionType
     let replaceDigits: (Range<Int>, String) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -18,7 +19,11 @@ struct CurrencyAmountTextField: UIViewRepresentable {
         textField.font = .preferredFont(forTextStyle: .body)
         textField.adjustsFontForContentSizeCategory = true
         textField.textColor = .label
-        textField.placeholder = "R$ 0,00"
+        textField.placeholder = CreateTransactionInputNormalizer
+            .formattedSignedBRLAmount(
+                from: digits,
+                transactionType: transactionType
+            )
         textField.accessibilityLabel = "Amount in BRL"
         textField.accessibilityIdentifier = "createTransaction.amount"
         return textField
@@ -28,12 +33,26 @@ struct CurrencyAmountTextField: UIViewRepresentable {
         context.coordinator.parent = self
         textField.isEnabled = isEnabled
 
-        let formattedAmount = CreateTransactionInputNormalizer
-            .formattedBRLAmount(from: digits)
+        let formattedAmount = digits.isEmpty
+            ? ""
+            : CreateTransactionInputNormalizer
+                .formattedSignedBRLAmount(
+                    from: digits,
+                    transactionType: transactionType
+                )
+        textField.placeholder = CreateTransactionInputNormalizer
+            .formattedSignedBRLAmount(
+                from: "",
+                transactionType: transactionType
+            )
 
         if textField.text != formattedAmount {
             textField.text = formattedAmount
         }
+
+        textField.accessibilityValue = formattedAmount.isEmpty
+            ? textField.placeholder
+            : formattedAmount
     }
 
     @MainActor
@@ -74,8 +93,13 @@ struct CurrencyAmountTextField: UIViewRepresentable {
             }
 
             parent.replaceDigits(replacementRange, string)
-            textField.text = CreateTransactionInputNormalizer
-                .formattedBRLAmount(from: parent.digits)
+            textField.text = parent.digits.isEmpty
+                ? ""
+                : CreateTransactionInputNormalizer
+                    .formattedSignedBRLAmount(
+                        from: parent.digits,
+                        transactionType: parent.transactionType
+                    )
             moveCaretToEndAfterFormatting(textField)
             return false
         }

@@ -56,7 +56,7 @@ struct APIClientTests {
         )
         #expect(json["accountId"] as? String == accountId.uuidString)
         #expect(json["categoryId"] as? String == categoryId.uuidString)
-        #expect(json["type"] as? String == "credit")
+        #expect(json["type"] as? String == "income")
         #expect(json["amountMinor"] as? Int == 15_000)
         #expect(json["currency"] as? String == "BRL")
         #expect(json["description"] as? String == "Salary")
@@ -66,12 +66,39 @@ struct APIClientTests {
         #expect(response.id == transactionId)
         #expect(response.accountId == accountId)
         #expect(response.categoryId == categoryId)
-        #expect(response.type == .credit)
+        #expect(response.type == .income)
         #expect(response.amountMinor == 15_000)
         #expect(response.currency == "BRL")
         #expect(response.description == "Salary")
         #expect(response.occurredAt == date("2026-07-30T18:00:00.000Z"))
         #expect(response.createdAt == date("2026-07-30T18:00:01.421Z"))
+    }
+
+    @Test
+    func expenseRequestEncodesAndDecodesUpdatedContract() async throws {
+        let capturedRequests = Mutex<[URLRequest]>([])
+        URLProtocolStub.install { request in
+            capturedRequests.withLock { $0.append(request) }
+            return .response(
+                try httpResponse(for: request, statusCode: 201),
+                successResponseData(type: .expense)
+            )
+        }
+        defer { URLProtocolStub.reset() }
+
+        let response = try await makeService().createTransaction(
+            makeRequest(type: .expense),
+            idempotencyKey: idempotencyKey
+        )
+
+        let request = try #require(capturedRequests.withLock { $0.first })
+        let body = try #require(request.httpBody)
+        let json = try #require(
+            JSONSerialization.jsonObject(with: body) as? [String: Any]
+        )
+
+        #expect(json["type"] as? String == "expense")
+        #expect(response.type == .expense)
     }
 
     @Test
@@ -360,12 +387,13 @@ struct APIClientTests {
 
     private func makeRequest(
         categoryId: UUID? = nil,
-        description: String? = nil
+        description: String? = nil,
+        type: TransactionType = .income
     ) throws -> TransactionRequest {
         try TransactionRequest(
             accountId: accountId,
             categoryId: categoryId,
-            type: .credit,
+            type: type,
             amountMinor: 15_000,
             currency: "BRL",
             description: description,
@@ -378,7 +406,8 @@ struct APIClientTests {
         occurredAt: String = "2026-07-30T18:00:00.000Z",
         createdAt: String = "2026-07-30T18:00:01.421Z",
         categoryId: UUID? = nil,
-        description: String? = nil
+        description: String? = nil,
+        type: TransactionType = .income
     ) -> Data {
         let categoryIdJSON = categoryId.map { "\"\($0.uuidString)\"" } ?? "null"
         let descriptionJSON = description.map { "\"\($0)\"" } ?? "null"
@@ -389,7 +418,7 @@ struct APIClientTests {
               "id": "\(transactionId.uuidString)",
               "accountId": "\(accountId.uuidString)",
               "categoryId": \(categoryIdJSON),
-              "type": "credit",
+              "type": "\(type.rawValue)",
               "amountMinor": 15000,
               "currency": "BRL",
               "description": \(descriptionJSON),

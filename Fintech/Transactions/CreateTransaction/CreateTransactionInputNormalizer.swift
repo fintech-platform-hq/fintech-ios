@@ -125,6 +125,19 @@ nonisolated enum CreateTransactionInputNormalizer {
         return "R$ \(groupedReais(reais)),\(centsText)"
     }
 
+    static func formattedSignedBRLAmount(
+        from digits: String,
+        transactionType: TransactionType
+    ) -> String {
+        let unsignedAmount = formattedBRLAmount(from: digits)
+
+        guard !unsignedAmount.isEmpty else {
+            return "\(transactionType.amountPresentationSign)R$ 0,00"
+        }
+
+        return "\(transactionType.amountPresentationSign)\(unsignedAmount)"
+    }
+
     private static func groupedReais(_ value: Int) -> String {
         let digits = Array(String(value))
         var grouped = ""

@@ -20,8 +20,9 @@ final class CreateTransactionViewModel {
     private(set) var successSnapshot: CreateTransactionSuccessSnapshot?
 
     var formattedAmountText: String {
-        CreateTransactionInputNormalizer.formattedBRLAmount(
-            from: amountDigits
+        CreateTransactionInputNormalizer.formattedSignedBRLAmount(
+            from: amountDigits,
+            transactionType: transactionType
         )
     }
 
@@ -35,7 +36,7 @@ final class CreateTransactionViewModel {
         service: any TransactionCreating,
         disposableDemoAccountID: UUID,
         amountDigits: String = "",
-        transactionType: TransactionType = .debit,
+        transactionType: TransactionType = .expense,
         descriptionText: String = "",
         initialState: CreateTransactionViewState = .idle,
         initialSuccessSnapshot: CreateTransactionSuccessSnapshot? = nil,
