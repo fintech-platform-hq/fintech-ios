@@ -8,34 +8,148 @@
 import XCTest
 
 final class FintechUITests: XCTestCase {
-
     override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-
-        // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
-
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
-    }
-
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
     }
 
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
+    func testCreateTransactionFormAndKeyboardDismissal() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let navigationBar = app.navigationBars["Create Transaction"]
+
+        XCTAssertTrue(
+            navigationBar.waitForExistence(timeout: 2)
+        )
+
+        let amountField = app.textFields["createTransaction.amount"]
+        let typePicker = app.segmentedControls["createTransaction.type"]
+        let incomeSegment = typePicker.buttons["Income"]
+        let descriptionField = app.textViews[
+            "createTransaction.description"
+        ]
+        let submitButton = app.buttons["createTransaction.submit"]
+
+        XCTAssertTrue(amountField.exists)
+        XCTAssertTrue(typePicker.exists)
+        XCTAssertTrue(incomeSegment.exists)
+        XCTAssertTrue(descriptionField.exists)
+        XCTAssertTrue(submitButton.exists)
+        XCTAssertTrue(submitButton.isHittable)
+
+        amountField.tap()
+
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 2))
+        XCTAssertTrue(keyboard.keys["1"].exists)
+        XCTAssertFalse(keyboard.keys["A"].exists)
+        XCTAssertTrue(submitButton.exists)
+        XCTAssertTrue(submitButton.isHittable)
+        XCTAssertFalse(app.toolbars.buttons["Done"].exists)
+
+        amountField.typeText("abc150,25xyz")
+        XCTAssertEqual(
+            amountField.value as? String,
+            "-R$ 150,25"
+        )
+
+        amountField.typeText(XCUIKeyboardKey.delete.rawValue)
+        XCTAssertEqual(
+            amountField.value as? String,
+            "-R$ 15,02"
+        )
+
+        incomeSegment.tap()
+
+        let updatedAmountField = app.textFields["createTransaction.amount"]
+        let amountUpdated = expectation(
+            for: NSPredicate(format: "value == %@", "+R$ 15,02"),
+            evaluatedWith: updatedAmountField
+        )
+        wait(for: [amountUpdated], timeout: 10)
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(submitButton.exists)
+        XCTAssertTrue(submitButton.isHittable)
+        XCTAssertEqual(
+            updatedAmountField.value as? String,
+            "+R$ 15,02"
+        )
+
+        descriptionField.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 2))
+        XCTAssertTrue(submitButton.exists)
+        XCTAssertTrue(submitButton.isHittable)
+        descriptionField.typeText(String(repeating: "a", count: 255))
+
+        let limitedDescription = try XCTUnwrap(
+            descriptionField.value as? String
+        )
+        XCTAssertEqual(limitedDescription.count, 255)
+
+        let heightAtLimit = descriptionField.frame.height
+        descriptionField.typeText("b")
+
+        let descriptionAfterExcessInput = try XCTUnwrap(
+            descriptionField.value as? String
+        )
+        XCTAssertEqual(descriptionAfterExcessInput.count, 255)
+        XCTAssertEqual(descriptionField.frame.height, heightAtLimit)
+
+        let descriptionCount = app.staticTexts[
+            "createTransaction.descriptionCount"
+        ]
+        XCTAssertEqual(descriptionCount.label, "255 of 255 characters")
+
+        typePicker.tap()
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(submitButton.exists)
+        XCTAssertTrue(submitButton.isHittable)
+    }
+
+    @MainActor
+    func testDescriptionHeightStaysBoundedForRepeatedNewlines() throws {
         let app = XCUIApplication()
         app.launch()
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // XCUIAutomation Documentation
-        // https://developer.apple.com/documentation/xcuiautomation
+        let descriptionField = app.textViews[
+            "createTransaction.description"
+        ]
+        let descriptionSurface = app.descendants(matching: .any)[
+            "createTransaction.descriptionSurface"
+        ]
+        let descriptionCount = app.staticTexts[
+            "createTransaction.descriptionCount"
+        ]
+        XCTAssertTrue(descriptionField.waitForExistence(timeout: 2))
+        XCTAssertTrue(descriptionSurface.exists)
+        XCTAssertTrue(descriptionCount.exists)
+
+        let initialFieldHeight = descriptionField.frame.height
+        let initialSurfaceHeight = descriptionSurface.frame.height
+        let initialSectionSpan = descriptionCount.frame.maxY
+            - descriptionSurface.frame.minY
+        descriptionField.tap()
+        descriptionField.typeText(
+            String(
+                repeating: XCUIKeyboardKey.return.rawValue,
+                count: 40
+            )
+        )
+
+        let enteredDescription = try XCTUnwrap(
+            descriptionField.value as? String
+        )
+        XCTAssertEqual(enteredDescription.count, 40)
+        XCTAssertEqual(descriptionField.frame.height, initialFieldHeight)
+        XCTAssertEqual(descriptionSurface.frame.height, initialSurfaceHeight)
+        XCTAssertEqual(
+            descriptionCount.frame.maxY - descriptionSurface.frame.minY,
+            initialSectionSpan
+        )
     }
 
     @MainActor
     func testLaunchPerformance() throws {
-        // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIApplication().launch()
         }

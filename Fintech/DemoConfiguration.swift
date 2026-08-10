@@ -1,10 +1,9 @@
 import Foundation
 
 nonisolated enum DemoConfiguration {
-    /// A placeholder used only by the development/demo composition root.
-    /// It does not imply account ownership and must be replaced with an
-    /// explicitly provisioned disposable account before a production demo.
+    /// A demo-only account identifier used by the development composition root.
+    /// Its presence does not imply that the current user owns this account.
     static let disposableTransactionAccountID = UUID(
-        uuidString: "00000000-0000-0000-0000-000000000001"
+        uuidString: "11111111-1111-4111-8111-111111111111"
     )!
 }

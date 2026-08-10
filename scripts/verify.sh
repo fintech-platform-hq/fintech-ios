@@ -68,9 +68,24 @@ simulator_id="$(
         sub(/^.*id:/, "", value)
         sub(/,.*/, "", value)
         gsub(/[[:space:]]/, "", value)
-        if (value != "") {
+        if (value == "") {
+          next
+        }
+
+        if ($0 ~ /name:iPhone/) {
           print value
+          selected = 1
           exit
+        }
+
+        if (fallback == "") {
+          fallback = value
+        }
+      }
+
+      END {
+        if (!selected && fallback != "") {
+          print fallback
         }
       }
     '
@@ -88,6 +103,10 @@ printf 'Project: %s\n' "${project_path}"
 printf 'Scheme: %s\n' "${scheme}"
 printf 'Destination: %s\n' "${destination}"
 printf 'Derived data: %s\n' "${DERIVED_DATA_PATH}"
+
+CURRENT_STEP="resetting selected simulator state"
+xcrun simctl shutdown "${simulator_id}" >/dev/null 2>&1 || true
+xcrun simctl erase "${simulator_id}"
 
 CURRENT_STEP="building ${scheme} for iOS Simulator"
 xcodebuild \

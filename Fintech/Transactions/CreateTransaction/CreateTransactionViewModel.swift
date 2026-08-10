@@ -4,19 +4,27 @@ import Observation
 @MainActor
 @Observable
 final class CreateTransactionViewModel {
-    var amountText: String {
-        didSet { formDidChange() }
-    }
+    static let descriptionCharacterLimit = 255
+    static let amountDigitLimit = CreateTransactionInputNormalizer
+        .amountDigitLimit
+
+    private(set) var amountDigits: String
 
     var transactionType: TransactionType {
         didSet { formDidChange() }
     }
 
-    var descriptionText: String {
-        didSet { formDidChange() }
-    }
+    private(set) var descriptionText: String
 
     private(set) var state: CreateTransactionViewState
+    private(set) var successSnapshot: CreateTransactionSuccessSnapshot?
+
+    var formattedAmountText: String {
+        CreateTransactionInputNormalizer.formattedSignedBRLAmount(
+            from: amountDigits,
+            transactionType: transactionType
+        )
+    }
 
     private let service: any TransactionCreating
     private let disposableDemoAccountID: UUID
@@ -27,21 +35,93 @@ final class CreateTransactionViewModel {
     init(
         service: any TransactionCreating,
         disposableDemoAccountID: UUID,
-        amountText: String = "",
-        transactionType: TransactionType = .debit,
+        amountDigits: String = "",
+        transactionType: TransactionType = .expense,
         descriptionText: String = "",
         initialState: CreateTransactionViewState = .idle,
+        initialSuccessSnapshot: CreateTransactionSuccessSnapshot? = nil,
         makeUUID: @escaping () -> UUID = UUID.init,
         now: @escaping () -> Date = Date.init
     ) {
         self.service = service
         self.disposableDemoAccountID = disposableDemoAccountID
-        self.amountText = amountText
+        self.amountDigits = CreateTransactionInputNormalizer
+            .limitedAmountDigits(from: amountDigits, preserving: "")
         self.transactionType = transactionType
-        self.descriptionText = descriptionText
+        self.descriptionText = Self.normalizedDescriptionInput(
+            descriptionText,
+            previousValue: ""
+        )
         self.state = initialState
+        self.successSnapshot = initialSuccessSnapshot
         self.makeUUID = makeUUID
         self.now = now
+    }
+
+    func updateAmountDigits(_ proposedValue: String) {
+        let previousValue = amountDigits
+        let sanitizedValue = CreateTransactionInputNormalizer
+            .limitedAmountDigits(
+                from: proposedValue,
+                preserving: previousValue
+            )
+
+        amountDigits = sanitizedValue
+
+        guard sanitizedValue != previousValue else {
+            return
+        }
+
+        formDidChange()
+    }
+
+    func replaceAmountDigits(
+        in range: Range<Int>,
+        with replacement: String
+    ) {
+        let previousValue = amountDigits
+        let updatedValue = CreateTransactionInputNormalizer
+            .replacingAmountDigits(
+                previousValue,
+                in: range,
+                with: replacement
+            )
+
+        amountDigits = updatedValue
+
+        guard updatedValue != previousValue else {
+            return
+        }
+
+        formDidChange()
+    }
+
+    func updateDescriptionText(_ proposedValue: String) {
+        let previousValue = descriptionText
+        let normalizedValue = Self.normalizedDescriptionInput(
+            proposedValue,
+            previousValue: previousValue
+        )
+
+        descriptionText = normalizedValue
+
+        guard normalizedValue != previousValue else {
+            return
+        }
+
+        formDidChange()
+    }
+
+    func startAnotherTransaction() {
+        guard state.isSuccess else {
+            return
+        }
+
+        amountDigits = ""
+        descriptionText = ""
+        pendingOperation = nil
+        successSnapshot = nil
+        state = .idle
     }
 
     func submit() async {
@@ -77,6 +157,12 @@ final class CreateTransactionViewModel {
                 operation.request,
                 idempotencyKey: operation.idempotencyKey
             )
+            successSnapshot = CreateTransactionSuccessSnapshot(
+                transactionID: response.id,
+                amountMinor: operation.request.amountMinor,
+                type: operation.request.type,
+                description: operation.request.description
+            )
             state = .success(transactionID: response.id)
         } catch is CancellationError {
             state = .failure(.submissionCancelled)
@@ -90,10 +176,7 @@ final class CreateTransactionViewModel {
     }
 
     private func makeOperation() throws -> PendingOperation {
-        let amountMinor = try Self.amountMinor(from: amountText)
-        let trimmedDescription = descriptionText.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
+        let amountMinor = try Self.amountMinor(from: amountDigits)
         let idempotencyKey = makeUUID()
         let clientMutationID = makeUUID()
         let request = try TransactionRequest(
@@ -102,7 +185,9 @@ final class CreateTransactionViewModel {
             type: transactionType,
             amountMinor: amountMinor,
             currency: "BRL",
-            description: trimmedDescription.isEmpty ? nil : trimmedDescription,
+            description: Self.normalizedDescriptionForSubmit(
+                from: descriptionText
+            ),
             occurredAt: now(),
             clientMutationId: clientMutationID
         )
@@ -123,56 +208,10 @@ final class CreateTransactionViewModel {
     }
 
     private static func amountMinor(from input: String) throws -> Int {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if trimmed.hasPrefix("-") {
-            throw CreateTransactionDisplayError.negativeAmount
-        }
-
-        guard !trimmed.isEmpty, !trimmed.hasPrefix("+") else {
-            throw CreateTransactionDisplayError.invalidAmount
-        }
-
-        let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
-        let components = normalized.split(
-            separator: ".",
-            omittingEmptySubsequences: false
-        )
-
-        guard components.count <= 2,
-              let wholeComponent = components.first,
-              !wholeComponent.isEmpty,
-              isASCIIDigits(wholeComponent),
-              let wholeUnits = Int(wholeComponent) else {
-            throw CreateTransactionDisplayError.invalidAmount
-        }
-
-        let fractionalComponent = components.count == 2 ? components[1] : ""
-
-        guard fractionalComponent.count <= 2,
-              isASCIIDigits(fractionalComponent) else {
-            throw CreateTransactionDisplayError.invalidAmount
-        }
-
-        let fractionalDigits: Int
-
-        switch fractionalComponent.count {
-        case 0:
-            fractionalDigits = 0
-        case 1:
-            fractionalDigits = Int(fractionalComponent)! * 10
-        case 2:
-            fractionalDigits = Int(fractionalComponent)!
-        default:
-            throw CreateTransactionDisplayError.invalidAmount
-        }
-
-        let (majorMinorUnits, multiplicationOverflow) = wholeUnits
-            .multipliedReportingOverflow(by: 100)
-        let (amountMinor, additionOverflow) = majorMinorUnits
-            .addingReportingOverflow(fractionalDigits)
-
-        guard !multiplicationOverflow, !additionOverflow else {
+        guard !input.isEmpty,
+              input.count <= amountDigitLimit,
+              input.utf8.allSatisfy({ (48...57).contains($0) }),
+              let amountMinor = Int(input) else {
             throw CreateTransactionDisplayError.invalidAmount
         }
 
@@ -183,8 +222,32 @@ final class CreateTransactionViewModel {
         return amountMinor
     }
 
-    private static func isASCIIDigits(_ value: Substring) -> Bool {
-        value.utf8.allSatisfy { (48...57).contains($0) }
+    private static func normalizedDescriptionInput(
+        _ proposedValue: String,
+        previousValue: String
+    ) -> String {
+        let limitedValue = String(
+            proposedValue.prefix(descriptionCharacterLimit)
+        )
+        let trimmedValue = limitedValue.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        guard !trimmedValue.isEmpty else {
+            return ""
+        }
+
+        return previousValue.isEmpty ? trimmedValue : limitedValue
+    }
+
+    private static func normalizedDescriptionForSubmit(
+        from description: String
+    ) -> String? {
+        let trimmedValue = description.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        return trimmedValue.isEmpty ? nil : trimmedValue
     }
 
     private static func displayError(for error: APIError) -> CreateTransactionDisplayError {

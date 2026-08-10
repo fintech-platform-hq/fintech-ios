@@ -1,177 +1,111 @@
 import SwiftUI
+import UIKit
 
 struct CreateTransactionView: View {
     let viewModel: CreateTransactionViewModel
+
+    private var amountValidationError: CreateTransactionDisplayError? {
+        guard case let .failure(error) = viewModel.state,
+              error.isAmountValidationError else {
+            return nil
+        }
+
+        return error
+    }
+
+    private var transactionFeedback: TransactionFeedback? {
+        switch viewModel.state {
+        case let .failure(error) where !error.isAmountValidationError:
+            .failure(title: error.feedbackTitle, message: error.message)
+        case .idle, .validating, .submitting, .success, .failure:
+            nil
+        }
+    }
+
+    private var amountDigits: Binding<String> {
+        Binding(
+            get: { viewModel.amountDigits },
+            set: viewModel.updateAmountDigits
+        )
+    }
+
+    private var descriptionText: Binding<String> {
+        Binding(
+            get: { viewModel.descriptionText },
+            set: viewModel.updateDescriptionText
+        )
+    }
+
+    private var isFormDisabled: Bool {
+        viewModel.state.isBusy || viewModel.state.isSuccess
+    }
 
     var body: some View {
         @Bindable var viewModel = viewModel
 
         NavigationStack {
             Form {
-                Section("Transaction") {
-                    HStack {
-                        TextField("Amount", text: $viewModel.amountText)
-                            .keyboardType(.decimalPad)
-                            .accessibilityIdentifier("createTransaction.amount")
-
-                        Text("BRL")
-                            .foregroundStyle(.secondary)
+                if let successSnapshot = viewModel.successSnapshot {
+                    Section {
+                        TransactionSuccessSummaryView(snapshot: successSnapshot)
                     }
-
-                    Picker("Type", selection: $viewModel.transactionType) {
-                        Text("Debit").tag(TransactionType.debit)
-                        Text("Credit").tag(TransactionType.credit)
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("createTransaction.type")
-                }
-                .disabled(viewModel.state.isBusy)
-
-                Section("Details") {
-                    TextField(
-                        "Description (optional)",
-                        text: $viewModel.descriptionText,
-                        axis: .vertical
+                } else {
+                    CreateTransactionFormSections(
+                        amountDigits: amountDigits,
+                        transactionType: $viewModel.transactionType,
+                        descriptionText: descriptionText,
+                        amountValidationError: amountValidationError,
+                        replaceAmountDigits: viewModel.replaceAmountDigits,
+                        isDisabled: isFormDisabled
                     )
-                    .lineLimit(2...4)
-                    .accessibilityIdentifier("createTransaction.description")
-                }
-                .disabled(viewModel.state.isBusy)
-
-                if viewModel.state != .idle {
-                    Section("Status") {
-                        statusContent
-                    }
                 }
 
-                Section {
-                    Button {
-                        Task {
-                            await viewModel.submit()
-                        }
-                    } label: {
-                        HStack {
-                            Spacer()
-
-                            if viewModel.state.isBusy {
-                                ProgressView()
-                                    .controlSize(.small)
-                            }
-
-                            Text(submitButtonTitle)
-                            Spacer()
-                        }
+                if let transactionFeedback {
+                    Section {
+                        TransactionFeedbackView(feedback: transactionFeedback)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.state.isBusy || viewModel.state.isSuccess)
-                    .accessibilityIdentifier("createTransaction.submit")
                 }
             }
             .navigationTitle("Create Transaction")
+            .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)
-        }
-    }
-
-    @ViewBuilder
-    private var statusContent: some View {
-        switch viewModel.state {
-        case .idle:
-            EmptyView()
-        case .validating:
-            Label("Validating amount…", systemImage: "checkmark.circle")
-                .accessibilityIdentifier("createTransaction.status")
-        case .submitting:
-            Label("Submitting transaction…", systemImage: "arrow.up.circle")
-                .accessibilityIdentifier("createTransaction.status")
-        case let .success(transactionID):
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Transaction created", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Text("ID: \(transactionID.uuidString)")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+            .background {
+                KeyboardDismissalTapObserver(action: dismissKeyboard)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("createTransaction.status")
-        case let .failure(error):
-            Label(error.message, systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
-                .accessibilityIdentifier("createTransaction.status")
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                CreateTransactionActionButton(
+                    state: viewModel.state,
+                    action: performPrimaryAction
+                )
+                .padding(.horizontal)
+                .padding(.vertical, 12)
+            }
         }
     }
 
-    private var submitButtonTitle: String {
-        switch viewModel.state {
-        case .validating:
-            "Validating"
-        case .submitting:
-            "Submitting"
-        case .success:
-            "Created"
-        case .idle, .failure:
-            "Create Transaction"
+    private func performPrimaryAction() {
+        if viewModel.state.isSuccess {
+            viewModel.startAnotherTransaction()
+            return
+        }
+
+        submit()
+    }
+
+    private func submit() {
+        dismissKeyboard()
+
+        Task {
+            await viewModel.submit()
         }
     }
-}
 
-#Preview("Idle") {
-    CreateTransactionView(
-        viewModel: previewViewModel()
-    )
-}
-
-#Preview("Loading") {
-    CreateTransactionView(
-        viewModel: previewViewModel(
-            amountText: "150,00",
-            state: .submitting
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
         )
-    )
-}
-
-#Preview("Success") {
-    CreateTransactionView(
-        viewModel: previewViewModel(
-            amountText: "150,00",
-            state: .success(
-                transactionID: UUID(
-                    uuidString: "6Aef7EC3-58FB-4AC7-8FF2-920E90CE0B4C"
-                )!
-            )
-        )
-    )
-}
-
-#Preview("Error") {
-    CreateTransactionView(
-        viewModel: previewViewModel(
-            amountText: "invalid",
-            state: .failure(.invalidAmount)
-        )
-    )
-}
-
-@MainActor
-private func previewViewModel(
-    amountText: String = "",
-    state: CreateTransactionViewState = .idle
-) -> CreateTransactionViewModel {
-    CreateTransactionViewModel(
-        service: PreviewTransactionService(),
-        disposableDemoAccountID: UUID(
-            uuidString: "00000000-0000-0000-0000-000000000001"
-        )!,
-        amountText: amountText,
-        initialState: state
-    )
-}
-
-private nonisolated struct PreviewTransactionService: TransactionCreating {
-    func createTransaction(
-        _ request: TransactionRequest,
-        idempotencyKey: UUID
-    ) async throws -> TransactionResponse {
-        throw CancellationError()
     }
 }

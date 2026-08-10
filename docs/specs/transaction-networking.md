@@ -1,6 +1,6 @@
 # Transaction Networking Specification
 
-Status: proposed for human approval before production implementation
+Status: client contract updated; production deployment must match before live use
 
 Last source inspection: 2026-07-31
 
@@ -25,7 +25,7 @@ This document records conflicts between the backend implementation, the backend 
 
 No production request was made during discovery. The verified behavior below is source-verified against the accessible repositories, not live-deployment-verified.
 
-## Verified backend contract
+## Expected backend contract
 
 ### Endpoint and headers
 
@@ -44,26 +44,26 @@ The service checks only that `Idempotency-Key` is nonempty, but the PostgreSQL c
 
 ### Request JSON
 
-The current backend DTO accepts only the following camelCase keys because global validation uses `whitelist: true` and `forbidNonWhitelisted: true`:
+The backend deployment must accept the following camelCase keys because global validation uses `whitelist: true` and `forbidNonWhitelisted: true`:
 
 | JSON field | Required | Implemented validation | Proposed Swift property |
 |---|---:|---|---|
 | `accountId` | yes | UUID string | `accountId: UUID` |
 | `categoryId` | no | UUID string when present; `null` is accepted | `categoryId: UUID?` |
-| `type` | yes | `"debit"` or `"credit"` | `type: TransactionType` |
+| `type` | yes | `"expense"` or `"income"` | `type: TransactionType` |
 | `amountMinor` | yes | integer in the DTO; database requires greater than zero | `amountMinor: Int` |
 | `currency` | yes | exactly three uppercase ASCII letters | `currency: String` |
 | `description` | no | string when present; `null` is accepted; no implemented length limit | `description: String?` |
 | `occurredAt` | yes | DTO checks only that it is a string; PostgreSQL must parse it as `timestamptz` | `occurredAt: Date` with an approved RFC 3339 encoding strategy |
 | `clientMutationId` | yes | UUID string; included in the idempotency request hash but not persisted in the transaction row | `clientMutationId: UUID` |
 
-Example matching the current implementation:
+Example required by the current iOS implementation:
 
 ```json
 {
   "accountId": "00000000-0000-0000-0000-000000000001",
   "categoryId": null,
-  "type": "credit",
+  "type": "income",
   "amountMinor": 15000,
   "currency": "BRL",
   "description": null,
@@ -76,35 +76,35 @@ Omitting an optional field and sending it as `null` produce the same server-side
 
 ### Response JSON
 
-The controller returns the PostgreSQL row directly. The implemented wire keys are snake_case and both nullable fields are returned:
+The controller returns the PostgreSQL row directly. The iOS client contract and `APIClientTests` use camelCase response keys with both nullable fields returned:
 
 ```json
 {
   "id": "6aef7ec3-58fb-4ac7-8ff2-920e90ce0b4c",
-  "account_id": "00000000-0000-0000-0000-000000000001",
-  "category_id": null,
-  "type": "credit",
-  "amount_minor": 15000,
+  "accountId": "00000000-0000-0000-0000-000000000001",
+  "categoryId": null,
+  "type": "income",
+  "amountMinor": 15000,
   "currency": "BRL",
   "description": null,
-  "occurred_at": "2026-07-30T18:00:00.000Z",
-  "created_at": "2026-07-30T18:00:01.421Z"
+  "occurredAt": "2026-07-30T18:00:00.000Z",
+  "createdAt": "2026-07-30T18:00:01.421Z"
 }
 ```
 
 | JSON field | Wire type | Proposed Swift property |
 |---|---|---|
 | `id` | UUID string | `id: UUID` |
-| `account_id` | UUID string | `accountId: UUID` |
-| `category_id` | UUID string or `null` | `categoryId: UUID?` |
-| `type` | `"debit"` or `"credit"` | `type: TransactionType` |
-| `amount_minor` | integer | `amountMinor: Int` |
+| `accountId` | UUID string | `accountId: UUID` |
+| `categoryId` | UUID string or `null` | `categoryId: UUID?` |
+| `type` | `"expense"` or `"income"` | `type: TransactionType` |
+| `amountMinor` | integer | `amountMinor: Int` |
 | `currency` | string | `currency: String` |
 | `description` | string or `null` | `description: String?` |
-| `occurred_at` | ISO-formatted timestamp string after JSON serialization | `occurredAt: Date` |
-| `created_at` | ISO-formatted timestamp string after JSON serialization | `createdAt: Date` |
+| `occurredAt` | ISO-formatted timestamp string after JSON serialization | `occurredAt: Date` |
+| `createdAt` | ISO-formatted timestamp string after JSON serialization | `createdAt: Date` |
 
-The proposed model uses explicit `CodingKeys`; global snake-case conversion is unnecessary for the camelCase request and could hide contract mistakes.
+The proposed model uses explicit `CodingKeys`; global snake-case conversion is unnecessary for the camelCase request and response and could hide contract mistakes.
 
 ### Current error format
 
@@ -150,7 +150,7 @@ Some database-derived `400` and `409` exceptions use Nest's generic message inst
 | Authentication | No authentication or authorization guard | OpenAPI requires bearer JWT; transaction docs require `Authorization` and describe `403` |
 | Request example | `clientMutationId` is required by the DTO | Backend README examples omit it and therefore do not satisfy current validation |
 | Idempotency key | Database requires UUID | Backend README uses `transaction-example-001`, which is not a UUID |
-| Response casing | Direct database row uses snake_case | OpenAPI and transaction docs specify camelCase |
+| Response casing | Current iOS client contract and APIClientTests use camelCase | Older OpenAPI and transaction docs still show snake_case |
 | Response fields | Includes `category_id` and `description`, including `null` | OpenAPI omits `categoryId` entirely and does not require `description`; examples omit category |
 | Error body | Nest envelope uses `statusCode`, `message`, and `error`; validation messages may be an array | OpenAPI/docs specify `{ "code", "message" }` |
 | Amount validation | DTO accepts any integer; database enforces `amount_minor > 0` | OpenAPI declares `minimum: 1` and docs describe request validation |
@@ -164,7 +164,7 @@ The domain definition also mentions decimal money in one invariant and data-mode
 
 ## Request model
 
-`TransactionRequest` is a value type conforming to `Encodable`, `Equatable`, and `Sendable`. It owns the exact eight fields listed above. `TransactionType` is a `String`, `Codable`, `Sendable` enum with only `debit` and `credit`.
+`TransactionRequest` is a value type conforming to `Encodable`, `Equatable`, and `Sendable`. It owns the exact eight fields listed above. `TransactionType` is a `String`, `Codable`, `Sendable` enum with only `expense` and `income`.
 
 The initializer should reject locally knowable invariants that are already part of the intended contract:
 
@@ -175,7 +175,7 @@ Date encoding must be centralized and covered by an exact JSON test. The approve
 
 ## Response model
 
-`TransactionResponse` is a value type conforming to `Decodable`, `Equatable`, `Identifiable`, and `Sendable`. It maps the nine implemented snake_case fields through explicit `CodingKeys`.
+`TransactionResponse` is a value type conforming to `Decodable`, `Equatable`, `Identifiable`, and `Sendable`. It maps the nine implemented camelCase fields through explicit `CodingKeys`.
 
 Use one shared, explicitly configured date-decoding strategy for `occurred_at` and `created_at`, including fractional-second and non-fractional RFC 3339 fixtures if both formats are approved. Do not make required backend fields optional merely to hide decoding failures.
 
