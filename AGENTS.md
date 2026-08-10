@@ -17,6 +17,14 @@ Fintech is the native iOS client for a fintech platform. The app must treat the 
 
 Treat the project settings as authoritative if these values change.
 
+## Skill Selection
+
+- Before non-trivial tasks, inspect `docs/skills/README.md` and the relevant available skill instructions.
+- Choose only skills relevant to the requested work, preferring fewer skills over more.
+- Before planning or implementing, report the selected skills and why each one applies.
+- Do not use UI or design skills for backend or networking work unless the task also includes a relevant UI or design concern.
+- Do not use security, performance, or concurrency skills unless the task touches those concerns.
+
 ## Architectural boundaries
 
 - Keep the initial networking feature focused on `APIClient`, `APIError`, transaction request/response models, and a transaction-specific service boundary.
