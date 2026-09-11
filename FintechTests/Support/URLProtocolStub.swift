@@ -10,17 +10,20 @@ final class URLProtocolStub: URLProtocol {
 
     typealias Handler = @Sendable (URLRequest) throws -> Behavior
 
-    private static let handler = Mutex<Handler?>(nil)
+    private static let handlers = Mutex<[String: Handler]>([:])
 
-    static func install(_ handler: @escaping Handler) {
-        Self.handler.withLock { storedHandler in
-            storedHandler = handler
+    static func install(
+        for baseURL: URL,
+        handler: @escaping Handler
+    ) {
+        handlers.withLock { handlers in
+            handlers[baseURL.host!] = handler
         }
     }
 
-    static func reset() {
-        handler.withLock { storedHandler in
-            storedHandler = nil
+    static func reset(for baseURL: URL) {
+        handlers.withLock { handlers in
+            handlers[baseURL.host!] = nil
         }
     }
 
@@ -33,7 +36,8 @@ final class URLProtocolStub: URLProtocol {
     }
 
     override func startLoading() {
-        guard let handler = Self.handler.withLock({ $0 }) else {
+        guard let host = request.url?.host,
+              let handler = Self.handlers.withLock({ $0[host] }) else {
             client?.urlProtocol(
                 self,
                 didFailWithError: URLError(.resourceUnavailable)

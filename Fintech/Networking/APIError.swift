@@ -5,6 +5,7 @@ nonisolated enum APIError: Error, Equatable, Sendable {
     case transport(code: URLError.Code)
     case invalidResponse
     case decoding
+    case unauthorized(messages: [String])
     case badRequest(messages: [String])
     case idempotencyConflict(message: String?)
     case server(statusCode: Int, message: String?)
@@ -22,6 +23,8 @@ extension APIError: LocalizedError {
             "The server returned an invalid response."
         case .decoding:
             "The server response could not be decoded."
+        case let .unauthorized(messages):
+            messages.first ?? "Authentication is required."
         case let .badRequest(messages):
             messages.first ?? "The transaction request was rejected."
         case let .idempotencyConflict(message):

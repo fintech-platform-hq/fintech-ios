@@ -14,7 +14,7 @@ final class FintechUITests: XCTestCase {
 
     @MainActor
     func testCreateTransactionFormAndKeyboardDismissal() throws {
-        let app = XCUIApplication()
+        let app = makeAuthenticatedApp()
         app.launch()
         let navigationBar = app.navigationBars["Create Transaction"]
 
@@ -108,7 +108,7 @@ final class FintechUITests: XCTestCase {
 
     @MainActor
     func testDescriptionHeightStaysBoundedForRepeatedNewlines() throws {
-        let app = XCUIApplication()
+        let app = makeAuthenticatedApp()
         app.launch()
 
         let descriptionField = app.textViews[
@@ -153,5 +153,11 @@ final class FintechUITests: XCTestCase {
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIApplication().launch()
         }
+    }
+
+    private func makeAuthenticatedApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments.append("-ui-testing-authenticated")
+        return app
     }
 }

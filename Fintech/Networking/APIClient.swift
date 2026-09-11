@@ -5,10 +5,16 @@ nonisolated struct APIClient: Sendable {
 
     private let baseURL: URL
     private let session: URLSession
+    private let authenticationSession: AuthenticationSession?
 
-    init(baseURL: URL, session: URLSession) {
+    init(
+        baseURL: URL,
+        session: URLSession,
+        authenticationSession: AuthenticationSession? = nil
+    ) {
         self.baseURL = baseURL
         self.session = session
+        self.authenticationSession = authenticationSession
     }
 
     func post<Request, Response>(
@@ -26,20 +32,115 @@ nonisolated struct APIClient: Sendable {
             throw APIError.encoding
         }
 
-        let pathComponents = path.split(separator: "/", omittingEmptySubsequences: true)
-        let url = pathComponents.reduce(baseURL) { partialURL, component in
-            partialURL.appendingPathComponent(String(component))
+        let responseData = try await execute(
+            path: path,
+            method: "POST",
+            body: data,
+            headers: headers,
+            expectedStatusCode: expectedStatusCode
+        )
+
+        do {
+            return try APICoding.makeDecoder().decode(Response.self, from: responseData)
+        } catch {
+            throw APIError.decoding
+        }
+    }
+
+    func postWithoutResponse<Request>(
+        path: String,
+        body: Request,
+        headers: [String: String],
+        expectedStatusCode: Int
+    ) async throws
+    where Request: Encodable & Sendable {
+        let data: Data
+
+        do {
+            data = try APICoding.makeEncoder().encode(body)
+        } catch {
+            throw APIError.encoding
         }
 
+        _ = try await execute(
+            path: path,
+            method: "POST",
+            body: data,
+            headers: headers,
+            expectedStatusCode: expectedStatusCode
+        )
+    }
+
+    private func execute(
+        path: String,
+        method: String,
+        body: Data,
+        headers: [String: String],
+        expectedStatusCode: Int
+    ) async throws -> Data {
+        let url = path
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .reduce(baseURL) { $0.appendingPathComponent(String($1)) }
+
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.httpBody = data
+        request.httpMethod = method
+        request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         for (field, value) in headers {
             request.setValue(value, forHTTPHeaderField: field)
         }
 
+        let firstToken: String?
+        if let authenticationSession {
+            let token = try await authenticationSession.accessToken()
+            firstToken = token
+            request.setValue(
+                "Bearer \(token)",
+                forHTTPHeaderField: "Authorization"
+            )
+        } else {
+            firstToken = nil
+        }
+
+        let firstResponse = try await send(request)
+        guard firstResponse.response.statusCode == 401,
+              let authenticationSession,
+              let firstToken else {
+            return try validatedData(
+                firstResponse.data,
+                response: firstResponse.response,
+                expectedStatusCode: expectedStatusCode
+            )
+        }
+
+        let refreshedToken: String
+        do {
+            refreshedToken = try await authenticationSession
+                .accessToken(afterUnauthorizedFor: firstToken)
+        } catch {
+            throw APIError.unauthorized(messages: [])
+        }
+
+        var retry = request
+        retry.setValue(
+            "Bearer \(refreshedToken)",
+            forHTTPHeaderField: "Authorization"
+        )
+        let retryResponse = try await send(retry)
+
+        if retryResponse.response.statusCode == 401 {
+            await authenticationSession.invalidate()
+        }
+
+        return try validatedData(
+            retryResponse.data,
+            response: retryResponse.response,
+            expectedStatusCode: expectedStatusCode
+        )
+    }
+
+    private func send(_ request: URLRequest) async throws -> (data: Data, response: HTTPURLResponse) {
         let responseData: Data
         let response: URLResponse
 
@@ -61,15 +162,19 @@ nonisolated struct APIClient: Sendable {
             throw APIError.invalidResponse
         }
 
-        guard httpResponse.statusCode == expectedStatusCode else {
-            throw mapHTTPError(statusCode: httpResponse.statusCode, data: responseData)
+        return (responseData, httpResponse)
+    }
+
+    private func validatedData(
+        _ data: Data,
+        response: HTTPURLResponse,
+        expectedStatusCode: Int
+    ) throws -> Data {
+        guard response.statusCode == expectedStatusCode else {
+            throw mapHTTPError(statusCode: response.statusCode, data: data)
         }
 
-        do {
-            return try APICoding.makeDecoder().decode(Response.self, from: responseData)
-        } catch {
-            throw APIError.decoding
-        }
+        return data
     }
 
     private func mapHTTPError(statusCode: Int, data: Data) -> APIError {
@@ -77,6 +182,8 @@ nonisolated struct APIClient: Sendable {
         let messages = payload?.messages ?? []
 
         switch statusCode {
+        case 401:
+            return .unauthorized(messages: messages)
         case 400:
             return .badRequest(messages: messages)
         case 409:

@@ -15,7 +15,7 @@ struct APIClientTests {
     @Test
     func successfulRequestEncodesAndDecodesVerifiedContract() async throws {
         let capturedRequests = Mutex<[URLRequest]>([])
-        URLProtocolStub.install { request in
+        URLProtocolStub.install(for: baseURL) { request in
             capturedRequests.withLock { $0.append(request) }
             return .response(
                 try httpResponse(for: request, statusCode: 201),
@@ -25,7 +25,7 @@ struct APIClientTests {
                 )
             )
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         let response = try await makeService().createTransaction(
             makeRequest(categoryId: categoryId, description: "Salary"),
@@ -77,14 +77,14 @@ struct APIClientTests {
     @Test
     func expenseRequestEncodesAndDecodesUpdatedContract() async throws {
         let capturedRequests = Mutex<[URLRequest]>([])
-        URLProtocolStub.install { request in
+        URLProtocolStub.install(for: baseURL) { request in
             capturedRequests.withLock { $0.append(request) }
             return .response(
                 try httpResponse(for: request, statusCode: 201),
                 successResponseData(type: .expense)
             )
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         let response = try await makeService().createTransaction(
             makeRequest(type: .expense),
@@ -104,14 +104,14 @@ struct APIClientTests {
     @Test
     func callerDirectedReplayKeepsHeaderAndPayloadStable() async throws {
         let capturedRequests = Mutex<[URLRequest]>([])
-        URLProtocolStub.install { request in
+        URLProtocolStub.install(for: baseURL) { request in
             capturedRequests.withLock { $0.append(request) }
             return .response(
                 try httpResponse(for: request, statusCode: 201),
                 successResponseData()
             )
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         let service = makeService()
         let request = try makeRequest(categoryId: nil, description: nil)
@@ -142,7 +142,7 @@ struct APIClientTests {
 
     @Test
     func responseDecodingAcceptsRFC3339WithoutFractionalSeconds() async throws {
-        URLProtocolStub.install { request in
+        URLProtocolStub.install(for: baseURL) { request in
             .response(
                 try httpResponse(for: request, statusCode: 201),
                 successResponseData(
@@ -151,7 +151,7 @@ struct APIClientTests {
                 )
             )
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         let response = try await makeService().createTransaction(
             makeRequest(),
@@ -164,7 +164,7 @@ struct APIClientTests {
 
     @Test
     func backendValidationArrayMapsToBadRequest() async throws {
-        URLProtocolStub.install { request in
+        URLProtocolStub.install(for: baseURL) { request in
             .response(
                 try httpResponse(for: request, statusCode: 400),
                 Data(
@@ -178,7 +178,7 @@ struct APIClientTests {
                 )
             )
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         await expectAPIError(
             .badRequest(messages: ["clientMutationId must be a UUID"])
@@ -192,7 +192,7 @@ struct APIClientTests {
 
     @Test
     func backendValidationStringMapsToBadRequest() async throws {
-        URLProtocolStub.install { request in
+        URLProtocolStub.install(for: baseURL) { request in
             .response(
                 try httpResponse(for: request, statusCode: 400),
                 Data(
@@ -206,7 +206,7 @@ struct APIClientTests {
                 )
             )
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         await expectAPIError(
             .badRequest(messages: ["Idempotency key required"])
@@ -221,7 +221,7 @@ struct APIClientTests {
     @Test
     func idempotencyConflictMapsToFocusedError() async throws {
         let message = "Idempotency key was already used with a different request"
-        URLProtocolStub.install { request in
+        URLProtocolStub.install(for: baseURL) { request in
             .response(
                 try httpResponse(for: request, statusCode: 409),
                 Data(
@@ -235,7 +235,7 @@ struct APIClientTests {
                 )
             )
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         await expectAPIError(.idempotencyConflict(message: message)) {
             try await makeService().createTransaction(
@@ -247,7 +247,7 @@ struct APIClientTests {
 
     @Test
     func serverFailureMapsWithoutRawBody() async throws {
-        URLProtocolStub.install { request in
+        URLProtocolStub.install(for: baseURL) { request in
             .response(
                 try httpResponse(for: request, statusCode: 503),
                 Data(
@@ -262,7 +262,7 @@ struct APIClientTests {
                 )
             )
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         await expectAPIError(
             .server(statusCode: 503, message: "Service unavailable")
@@ -276,7 +276,7 @@ struct APIClientTests {
 
     @Test
     func unexpectedStatusMapsToHTTPError() async throws {
-        URLProtocolStub.install { request in
+        URLProtocolStub.install(for: baseURL) { request in
             .response(
                 try httpResponse(for: request, statusCode: 418),
                 Data(
@@ -286,7 +286,7 @@ struct APIClientTests {
                 )
             )
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         await expectAPIError(.http(statusCode: 418, message: "Unexpected")) {
             try await makeService().createTransaction(
@@ -298,13 +298,13 @@ struct APIClientTests {
 
     @Test
     func malformedSuccessResponseMapsToDecodingError() async throws {
-        URLProtocolStub.install { request in
+        URLProtocolStub.install(for: baseURL) { request in
             .response(
                 try httpResponse(for: request, statusCode: 201),
                 Data(#"{"id":"not-a-uuid"}"#.utf8)
             )
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         await expectAPIError(.decoding) {
             try await makeService().createTransaction(
@@ -316,7 +316,7 @@ struct APIClientTests {
 
     @Test
     func nonHTTPResponseMapsToInvalidResponse() async throws {
-        URLProtocolStub.install { request in
+        URLProtocolStub.install(for: baseURL) { request in
             .response(
                 URLResponse(
                     url: try #require(request.url),
@@ -327,7 +327,7 @@ struct APIClientTests {
                 Data()
             )
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         await expectAPIError(.invalidResponse) {
             try await makeService().createTransaction(
@@ -339,10 +339,10 @@ struct APIClientTests {
 
     @Test
     func URLSessionFailureMapsToTransportError() async throws {
-        URLProtocolStub.install { _ in
+        URLProtocolStub.install(for: baseURL) { _ in
             .failure(URLError(.notConnectedToInternet))
         }
-        defer { URLProtocolStub.reset() }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         await expectAPIError(.transport(code: .notConnectedToInternet)) {
             try await makeService().createTransaction(
@@ -354,8 +354,8 @@ struct APIClientTests {
 
     @Test
     func taskCancellationPropagates() async throws {
-        URLProtocolStub.install { _ in .pending }
-        defer { URLProtocolStub.reset() }
+        URLProtocolStub.install(for: baseURL) { _ in .pending }
+        defer { URLProtocolStub.reset(for: baseURL) }
 
         let service = makeService()
         let request = try makeRequest()
