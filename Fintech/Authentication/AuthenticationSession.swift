@@ -4,6 +4,11 @@ enum AuthenticationSessionEvent: Sendable {
     case reauthenticationRequired(generation: Int)
 }
 
+nonisolated struct AppleLinkSession: Equatable, Sendable {
+    let generation: Int
+    let email: String
+}
+
 actor AuthenticationSession {
     private let service: any AuthenticationServicing
     private let credentialStore: any CredentialStoring
@@ -13,6 +18,8 @@ actor AuthenticationSession {
     private(set) var refreshOperationID: UUID?
     private var credentialMutation: Task<Void, Error>?
     private var generation = 0
+    private var passwordEmail: String?
+    private var linkOperationID: UUID?
     private var eventContinuations: [UUID: AsyncStream<AuthenticationSessionEvent>.Continuation] = [:]
 
     init(
@@ -43,15 +50,21 @@ actor AuthenticationSession {
     }
 
     func login(_ credentials: AuthenticationCredentials) async throws {
+        linkOperationID = nil
+        passwordEmail = nil
         cancelRefresh()
         generation += 1
         let requestGeneration = generation
         let newTokens = try await service.login(credentials)
         guard generation == requestGeneration else { throw CancellationError() }
         try await persist(newTokens, generation: requestGeneration)
+        guard generation == requestGeneration else { throw CancellationError() }
+        passwordEmail = credentials.email
     }
 
     func register(_ credentials: AuthenticationCredentials) async throws {
+        linkOperationID = nil
+        passwordEmail = nil
         cancelRefresh()
         generation += 1
         let requestGeneration = generation
@@ -60,13 +73,46 @@ actor AuthenticationSession {
         try await persist(newTokens, generation: requestGeneration)
     }
 
-    func signInWithApple(_ authorization: AppleAuthorizationResult) async throws {
+    func signInWithApple(_ authorization: AppleAuthorizationResult, expectedGeneration: Int? = nil) async throws {
+        if let expectedGeneration, generation != expectedGeneration { throw CancellationError() }
+        linkOperationID = nil
+        passwordEmail = nil
         cancelRefresh()
         generation += 1
         let requestGeneration = generation
         let newTokens = try await service.signInWithApple(authorization)
         guard generation == requestGeneration else { throw CancellationError() }
         try await persist(newTokens, generation: requestGeneration)
+    }
+
+    func currentGeneration() -> Int { generation }
+
+    func isCurrent(_ expectedGeneration: Int) -> Bool { generation == expectedGeneration }
+
+    func appleLinkSession() throws -> AppleLinkSession {
+        guard tokens != nil, let passwordEmail else {
+            throw AuthenticationError.request(.http(statusCode: 403, message: nil))
+        }
+        return AppleLinkSession(generation: generation, email: passwordEmail)
+    }
+
+    func linkApple(_ authorization: AppleAuthorizationResult, session: AppleLinkSession, operationID: UUID) async throws {
+        guard generation == session.generation else { throw CancellationError() }
+        guard passwordEmail == session.email, let token = tokens?.accessToken else {
+            throw AuthenticationError.request(.http(statusCode: 403, message: nil))
+        }
+        guard linkOperationID == nil else { throw AuthenticationError.operationInProgress }
+        try Task.checkCancellation()
+        linkOperationID = operationID
+        defer { if linkOperationID == operationID { linkOperationID = nil } }
+        do {
+            try await service.linkApple(authorization, accessToken: token)
+        } catch {
+            guard generation == session.generation, linkOperationID == operationID else { throw CancellationError() }
+            throw error
+        }
+        guard generation == session.generation, linkOperationID == operationID else { throw CancellationError() }
+        try Task.checkCancellation()
     }
 
     func signInWithApple(using provider: any AppleAuthorizationProviding) async throws {
@@ -162,6 +208,8 @@ actor AuthenticationSession {
     }
 
     func logout() async {
+        passwordEmail = nil
+        linkOperationID = nil
         generation += 1
         let requestGeneration = generation
         cancelRefresh()
@@ -183,6 +231,8 @@ actor AuthenticationSession {
     }
 
     func invalidate() async {
+        passwordEmail = nil
+        linkOperationID = nil
         generation += 1
         let requestGeneration = generation
         cancelRefresh()

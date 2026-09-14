@@ -8,6 +8,7 @@ nonisolated enum AuthenticationError: Error, Equatable, Sendable {
     case refreshUnavailable
     case reauthenticationRequired
     case operationInProgress
+    case accountLinkRequired
     case request(APIError)
 }
 
@@ -28,6 +29,8 @@ extension AuthenticationError: LocalizedError {
             "Please sign in again."
         case .operationInProgress:
             "Authentication is already in progress."
+        case .accountLinkRequired:
+            "An existing account can be linked explicitly after signing in."
         case let .request(error):
             error.errorDescription
         }

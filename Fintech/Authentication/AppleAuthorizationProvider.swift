@@ -7,6 +7,11 @@ protocol AppleAuthorizationProviding: Sendable {
     func configure(_ request: ASAuthorizationAppleIDRequest) throws
     func authorization() async throws -> AppleAuthorizationResult
     func complete(_ result: Result<ASAuthorization, Error>, operationID: UUID)
+    func cancel(operationID: UUID)
+}
+
+extension AppleAuthorizationProviding {
+    func cancel(operationID: UUID) {}
 }
 
 @MainActor
@@ -100,5 +105,12 @@ final class AppleAuthorizationProvider: NSObject, AppleAuthorizationProviding {
         operationID = UUID()
         pendingResult = nil
         waiting = false
+    }
+
+    func cancel(operationID: UUID) {
+        guard self.operationID == operationID else { return }
+        let continuation = self.continuation
+        reset()
+        continuation?.resume(throwing: CancellationError())
     }
 }

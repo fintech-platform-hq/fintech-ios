@@ -10,6 +10,7 @@ nonisolated enum APIError: Error, Equatable, Sendable {
     case reauthenticationRequired
     case badRequest(messages: [String])
     case idempotencyConflict(message: String?)
+    case accountLinkRequired
     case server(statusCode: Int, message: String?)
     case http(statusCode: Int, message: String?)
 }
@@ -35,6 +36,8 @@ extension APIError: LocalizedError {
             messages.first ?? "The transaction request was rejected."
         case let .idempotencyConflict(message):
             message ?? "The idempotency key conflicts with an earlier transaction request."
+        case .accountLinkRequired:
+            "An existing account requires explicit Apple linking."
         case let .server(statusCode, message):
             message ?? "The server failed to process the request (HTTP \(statusCode))."
         case let .http(statusCode, message):

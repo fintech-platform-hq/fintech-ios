@@ -25,6 +25,9 @@ struct ContentView: View {
                             }
                         }
                     }
+                    .sheet(isPresented: Binding(get: { authenticationViewModel.shouldOfferAppleLink }, set: { if !$0 { authenticationViewModel.dismissAppleLinkOffer() } })) {
+                        AuthenticationView(viewModel: authenticationViewModel)
+                    }
             case .unauthenticated, .authenticating, .failure:
                 AuthenticationView(viewModel: authenticationViewModel)
             }

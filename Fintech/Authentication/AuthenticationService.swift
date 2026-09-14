@@ -5,6 +5,7 @@ nonisolated protocol AuthenticationServicing: Sendable {
     func register(_ credentials: AuthenticationCredentials) async throws -> AuthTokens
     func refresh(refreshToken: String) async throws -> AuthTokens
     func signInWithApple(_ authorization: AppleAuthorizationResult) async throws -> AuthTokens
+    func linkApple(_ authorization: AppleAuthorizationResult, accessToken: String) async throws
     func logout(refreshToken: String) async throws
 }
 
@@ -43,17 +44,38 @@ nonisolated struct AuthenticationService: AuthenticationServicing {
     }
 
     func signInWithApple(_ authorization: AppleAuthorizationResult) async throws -> AuthTokens {
-        try await perform {
-            try await apiClient.post(
-                path: "/auth/apple",
+        do {
+            return try await perform {
+                try await apiClient.post(
+                    path: "/auth/apple",
+                    body: AppleAuthenticationRequest(
+                        identityToken: authorization.identityToken,
+                        authorizationCode: authorization.authorizationCode,
+                        nonce: authorization.nonce
+                    ),
+                    headers: [:],
+                    expectedStatusCode: 200
+                ) as AuthTokens
+            }
+        } catch AuthenticationError.request(.accountLinkRequired) {
+            throw AuthenticationError.accountLinkRequired
+        }
+    }
+
+    func linkApple(_ authorization: AppleAuthorizationResult, accessToken: String) async throws {
+        do {
+            try await apiClient.postWithoutResponse(
+                path: "/auth/apple/link",
                 body: AppleAuthenticationRequest(
                     identityToken: authorization.identityToken,
                     authorizationCode: authorization.authorizationCode,
                     nonce: authorization.nonce
                 ),
-                headers: [:],
-                expectedStatusCode: 200
-            ) as AuthTokens
+                headers: ["Authorization": "Bearer \(accessToken)"],
+                expectedStatusCode: 204
+            )
+        } catch let error as APIError {
+            throw AuthenticationError.request(error)
         }
     }
 

@@ -92,7 +92,7 @@ nonisolated struct APIClient: Sendable {
         }
 
         let firstToken: String?
-        if let authenticationSession {
+        if let authenticationSession, path != "/auth/apple/link" {
             let token = try await authenticationSession.accessToken()
             firstToken = token
             request.setValue(
@@ -110,7 +110,8 @@ nonisolated struct APIClient: Sendable {
             return try validatedData(
                 firstResponse.data,
                 response: firstResponse.response,
-                expectedStatusCode: expectedStatusCode
+                expectedStatusCode: expectedStatusCode,
+                appleSignIn: path == "/auth/apple"
             )
         }
 
@@ -172,16 +173,17 @@ nonisolated struct APIClient: Sendable {
     private func validatedData(
         _ data: Data,
         response: HTTPURLResponse,
-        expectedStatusCode: Int
+        expectedStatusCode: Int,
+        appleSignIn: Bool = false
     ) throws -> Data {
         guard response.statusCode == expectedStatusCode else {
-            throw mapHTTPError(statusCode: response.statusCode, data: data)
+            throw mapHTTPError(statusCode: response.statusCode, data: data, appleSignIn: appleSignIn)
         }
 
         return data
     }
 
-    private func mapHTTPError(statusCode: Int, data: Data) -> APIError {
+    private func mapHTTPError(statusCode: Int, data: Data, appleSignIn: Bool) -> APIError {
         let payload = try? JSONDecoder().decode(APIErrorPayload.self, from: data)
         let messages = payload?.messages ?? []
 
@@ -191,6 +193,7 @@ nonisolated struct APIClient: Sendable {
         case 400:
             return .badRequest(messages: messages)
         case 409:
+            if appleSignIn, payload?.code == "ACCOUNT_LINK_REQUIRED" { return .accountLinkRequired }
             return .idempotencyConflict(message: messages.first)
         case 500...599:
             return .server(statusCode: statusCode, message: messages.first)
@@ -204,6 +207,7 @@ private nonisolated struct APIErrorPayload: Decodable, Sendable {
     let statusCode: Int?
     let message: APIErrorMessage?
     let error: String?
+    let code: String?
 
     var messages: [String] {
         message?.values ?? []

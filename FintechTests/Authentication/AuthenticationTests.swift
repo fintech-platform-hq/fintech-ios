@@ -407,6 +407,7 @@ actor ControlledAuthenticationService: AuthenticationServicing {
         if let appleFailure { throw appleFailure }
         return replacementTokens
     }
+    func linkApple(_ authorization: AppleAuthorizationResult, accessToken: String) async throws {}
     func setAppleFailure(_ error: AuthenticationError) { appleFailure = error }
     func refresh(refreshToken: String) async throws -> AuthTokens {
         requestedRefreshTokens.append(refreshToken)
