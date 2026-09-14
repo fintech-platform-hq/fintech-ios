@@ -1,6 +1,14 @@
 import Foundation
 
-nonisolated struct AuthenticationService: Sendable {
+nonisolated protocol AuthenticationServicing: Sendable {
+    func login(_ credentials: AuthenticationCredentials) async throws -> AuthTokens
+    func register(_ credentials: AuthenticationCredentials) async throws -> AuthTokens
+    func refresh(refreshToken: String) async throws -> AuthTokens
+    func signInWithApple(_ authorization: AppleAuthorizationResult) async throws -> AuthTokens
+    func logout(refreshToken: String) async throws
+}
+
+nonisolated struct AuthenticationService: AuthenticationServicing {
     private let apiClient: APIClient
 
     init(apiClient: APIClient) {
@@ -28,6 +36,21 @@ nonisolated struct AuthenticationService: Sendable {
             try await apiClient.post(
                 path: "/auth/refresh",
                 body: RefreshTokenRequest(refreshToken: refreshToken),
+                headers: [:],
+                expectedStatusCode: 200
+            ) as AuthTokens
+        }
+    }
+
+    func signInWithApple(_ authorization: AppleAuthorizationResult) async throws -> AuthTokens {
+        try await perform {
+            try await apiClient.post(
+                path: "/auth/apple",
+                body: AppleAuthenticationRequest(
+                    identityToken: authorization.identityToken,
+                    authorizationCode: authorization.authorizationCode,
+                    nonce: authorization.nonce
+                ),
                 headers: [:],
                 expectedStatusCode: 200
             ) as AuthTokens

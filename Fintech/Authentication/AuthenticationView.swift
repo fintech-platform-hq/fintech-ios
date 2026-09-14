@@ -1,9 +1,11 @@
+import AuthenticationServices
 import SwiftUI
 
 struct AuthenticationView: View {
     let viewModel: AuthenticationViewModel
 
     @State private var mode: Mode = .login
+    @AccessibilityFocusState private var errorFocused: Bool
 
     private enum Mode: String, CaseIterable {
         case login = "Sign In"
@@ -12,6 +14,7 @@ struct AuthenticationView: View {
 
     var body: some View {
         @Bindable var viewModel = viewModel
+        let appleOperationID = viewModel.appleOperationID
 
         NavigationStack {
             Form {
@@ -42,12 +45,35 @@ struct AuthenticationView: View {
                 }
                 .disabled(viewModel.state == .authenticating)
 
+                SignInWithAppleButton(.signIn) { request in
+                    viewModel.configureAppleRequest(request, operationID: appleOperationID)
+                } onCompletion: { result in
+                    viewModel.completeAppleAuthorization(result, operationID: appleOperationID)
+                }
+                // Keep each native button instance bound to its original authorization.
+                .id(appleOperationID)
+                .signInWithAppleButtonStyle(.black)
+                .frame(height: 44)
+                .disabled(viewModel.state == .authenticating)
+
+                if viewModel.state == .authenticating {
+                    ProgressView("Signing in…")
+                }
+
                 if case let .failure(error) = viewModel.state {
                     Text(error.message)
                         .foregroundStyle(.red)
+                        .accessibilityFocused($errorFocused)
                 }
             }
             .navigationTitle("Fintech")
+            .onChange(of: viewModel.state, initial: true) { _, state in
+                if case .failure = state {
+                    errorFocused = true
+                } else {
+                    errorFocused = false
+                }
+            }
         }
     }
 }

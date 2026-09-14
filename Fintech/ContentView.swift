@@ -32,5 +32,8 @@ struct ContentView: View {
         .task {
             await authenticationViewModel.restore()
         }
+        .task {
+            await authenticationViewModel.observeSession()
+        }
     }
 }

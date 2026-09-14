@@ -53,7 +53,10 @@ struct FintechApp: App {
         let transactionService = TransactionService(apiClient: authenticatedClient)
 
         _authenticationViewModel = State(
-            initialValue: AuthenticationViewModel(session: authenticationSession)
+            initialValue: AuthenticationViewModel(
+                session: authenticationSession,
+                appleProvider: AppleAuthorizationProvider()
+            )
         )
         _createTransactionViewModel = State(
             initialValue: CreateTransactionViewModel(

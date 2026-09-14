@@ -118,6 +118,10 @@ nonisolated struct APIClient: Sendable {
         do {
             refreshedToken = try await authenticationSession
                 .accessToken(afterUnauthorizedFor: firstToken)
+        } catch AuthenticationError.refreshUnavailable {
+            throw APIError.refreshUnavailable
+        } catch AuthenticationError.reauthenticationRequired {
+            throw APIError.reauthenticationRequired
         } catch {
             throw APIError.unauthorized(messages: [])
         }

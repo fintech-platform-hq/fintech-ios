@@ -5,6 +5,9 @@ nonisolated enum AuthenticationError: Error, Equatable, Sendable {
     case invalidTokenResponse
     case credentialsUnavailable
     case refreshFailed
+    case refreshUnavailable
+    case reauthenticationRequired
+    case operationInProgress
     case request(APIError)
 }
 
@@ -19,6 +22,12 @@ extension AuthenticationError: LocalizedError {
             "Saved credentials are temporarily unavailable."
         case .refreshFailed:
             "Your session expired. Sign in again."
+        case .refreshUnavailable:
+            "Authentication is temporarily unavailable."
+        case .reauthenticationRequired:
+            "Please sign in again."
+        case .operationInProgress:
+            "Authentication is already in progress."
         case let .request(error):
             error.errorDescription
         }

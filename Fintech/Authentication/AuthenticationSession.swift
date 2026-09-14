@@ -1,15 +1,22 @@
 import Foundation
 
+enum AuthenticationSessionEvent: Sendable {
+    case reauthenticationRequired(generation: Int)
+}
+
 actor AuthenticationSession {
-    private let service: AuthenticationService
+    private let service: any AuthenticationServicing
     private let credentialStore: any CredentialStoring
     private var tokens: AuthTokens?
     private var loaded = false
     private var refreshTask: Task<AuthTokens, Error>?
+    private(set) var refreshOperationID: UUID?
+    private var credentialMutation: Task<Void, Error>?
     private var generation = 0
+    private var eventContinuations: [UUID: AsyncStream<AuthenticationSessionEvent>.Continuation] = [:]
 
     init(
-        service: AuthenticationService,
+        service: any AuthenticationServicing,
         credentialStore: any CredentialStoring
     ) {
         self.service = service
@@ -21,13 +28,27 @@ actor AuthenticationSession {
         return tokens != nil
     }
 
+    func requiresReauthentication(for eventGeneration: Int) -> Bool {
+        generation == eventGeneration && tokens == nil
+    }
+
+    func events() -> AsyncStream<AuthenticationSessionEvent> {
+        let id = UUID()
+        return AsyncStream { continuation in
+            eventContinuations[id] = continuation
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeEventContinuation(id) }
+            }
+        }
+    }
+
     func login(_ credentials: AuthenticationCredentials) async throws {
         cancelRefresh()
         generation += 1
         let requestGeneration = generation
         let newTokens = try await service.login(credentials)
         guard generation == requestGeneration else { throw CancellationError() }
-        try await persist(newTokens)
+        try await persist(newTokens, generation: requestGeneration)
     }
 
     func register(_ credentials: AuthenticationCredentials) async throws {
@@ -36,7 +57,22 @@ actor AuthenticationSession {
         let requestGeneration = generation
         let newTokens = try await service.register(credentials)
         guard generation == requestGeneration else { throw CancellationError() }
-        try await persist(newTokens)
+        try await persist(newTokens, generation: requestGeneration)
+    }
+
+    func signInWithApple(_ authorization: AppleAuthorizationResult) async throws {
+        cancelRefresh()
+        generation += 1
+        let requestGeneration = generation
+        let newTokens = try await service.signInWithApple(authorization)
+        guard generation == requestGeneration else { throw CancellationError() }
+        try await persist(newTokens, generation: requestGeneration)
+    }
+
+    func signInWithApple(using provider: any AppleAuthorizationProviding) async throws {
+        let authorization = try await provider.authorization()
+        try Task.checkCancellation()
+        try await signInWithApple(authorization)
     }
 
     func accessToken() async throws -> String {
@@ -47,7 +83,10 @@ actor AuthenticationSession {
         return accessToken
     }
 
-    func accessToken(afterUnauthorizedFor rejectedToken: String) async throws -> String {
+    func accessToken(
+        afterUnauthorizedFor rejectedToken: String,
+        onRefreshWait: @Sendable (UUID) -> Void = { _ in }
+    ) async throws -> String {
         try await loadIfNeeded()
 
         guard let currentTokens = tokens else {
@@ -58,92 +97,180 @@ actor AuthenticationSession {
         }
 
         if let refreshTask {
-            return try await refreshTask.value.accessToken
+            let requestGeneration = generation
+            // Synchronous observation makes pending single-flight consumers testable.
+            if let refreshOperationID { onRefreshWait(refreshOperationID) }
+            let result = try await refreshTask.value
+            guard generation == requestGeneration else { throw CancellationError() }
+            return result.accessToken
         }
 
         let requestGeneration = generation
-        let refreshToken = currentTokens.refreshToken
+        let operationID = UUID()
         let task = Task { [weak self] in
             guard let self else { throw AuthenticationError.refreshFailed }
             return try await self.refreshAndPersist(
-                refreshToken: refreshToken,
+                previousTokens: currentTokens,
                 generation: requestGeneration
             )
         }
         refreshTask = task
-
-        do {
-            let newTokens = try await task.value
-            refreshTask = nil
-            return newTokens.accessToken
-        } catch {
-            if generation == requestGeneration {
-                tokens = nil
-                loaded = true
-                try? await credentialStore.delete()
+        refreshOperationID = operationID
+        defer {
+            if refreshOperationID == operationID {
                 refreshTask = nil
+                refreshOperationID = nil
             }
-            throw AuthenticationError.refreshFailed
         }
+        onRefreshWait(operationID)
+        let newTokens = try await task.value
+        guard generation == requestGeneration else { throw CancellationError() }
+        return newTokens.accessToken
     }
 
     private func refreshAndPersist(
-        refreshToken: String,
+        previousTokens: AuthTokens,
         generation requestGeneration: Int
     ) async throws -> AuthTokens {
-        let newTokens = try await service.refresh(refreshToken: refreshToken)
+        // Fail closed across relaunch without changing the Keychain record format.
+        // ponytail: a crash during refresh requires sign-in; a durable in-flight record
+        // is only needed if future requirements must preserve that session across relaunch.
+        // A definitive 503 restores the record.
+        try await mutateCredentials(generation: requestGeneration) { store in
+            try await store.delete()
+        }
+        guard generation == requestGeneration else { throw CancellationError() }
+        try Task.checkCancellation()
+        let newTokens: AuthTokens
+        do {
+            newTokens = try await service.refresh(refreshToken: previousTokens.refreshToken)
+        } catch {
+            guard generation == requestGeneration else { throw CancellationError() }
+            if case AuthenticationError.request(.server(statusCode: 503, message: _)) = error {
+                try await persist(previousTokens, generation: requestGeneration)
+                throw AuthenticationError.refreshUnavailable
+            }
+            endSession(generation: requestGeneration)
+            throw AuthenticationError.reauthenticationRequired
+        }
         guard generation == requestGeneration,
-              tokens?.refreshToken == refreshToken else {
+              tokens?.refreshToken == previousTokens.refreshToken else {
             throw CancellationError()
         }
-        try await persist(newTokens)
+        try await persist(newTokens, generation: requestGeneration)
         return newTokens
     }
 
     func logout() async {
         generation += 1
+        let requestGeneration = generation
         cancelRefresh()
         try? await loadIfNeeded()
+        guard generation == requestGeneration else { return }
         if let refreshToken = tokens?.refreshToken {
             try? await service.logout(refreshToken: refreshToken)
         }
+        guard generation == requestGeneration else { return }
         tokens = nil
         loaded = true
-        try? await credentialStore.delete()
+        do {
+            try await mutateCredentials(generation: requestGeneration) { try await $0.delete() }
+        } catch {
+            if generation == requestGeneration {
+                emit(.reauthenticationRequired(generation: requestGeneration))
+            }
+        }
     }
 
     func invalidate() async {
         generation += 1
+        let requestGeneration = generation
         cancelRefresh()
         tokens = nil
         loaded = true
-        try? await credentialStore.delete()
+        do {
+            try await mutateCredentials(generation: requestGeneration) { try await $0.delete() }
+        } catch {
+            // Local invalidation remains in force; the event requests reauthentication.
+        }
+        guard generation == requestGeneration else { return }
+        emit(.reauthenticationRequired(generation: requestGeneration))
+    }
+
+    private func endSession(generation requestGeneration: Int) {
+        guard generation == requestGeneration else { return }
+        tokens = nil
+        loaded = true
+        emit(.reauthenticationRequired(generation: requestGeneration))
+    }
+
+    private func emit(_ event: AuthenticationSessionEvent) {
+        eventContinuations.values.forEach { $0.yield(event) }
+    }
+
+    private func removeEventContinuation(_ id: UUID) {
+        eventContinuations[id] = nil
     }
 
     private func loadIfNeeded() async throws {
         guard !loaded else { return }
+        let requestGeneration = generation
         do {
-            tokens = try await credentialStore.load()
+            let restored = try await credentialStore.load()
+            guard generation == requestGeneration, !loaded else { return }
+            tokens = restored
             loaded = true
         } catch {
             throw AuthenticationError.credentialsUnavailable
         }
     }
 
-    private func persist(_ newTokens: AuthTokens) async throws {
+    private func persist(_ newTokens: AuthTokens, generation requestGeneration: Int) async throws {
         do {
-            try await credentialStore.save(newTokens)
+            try await mutateCredentials(generation: requestGeneration) { store in
+                try await store.save(newTokens)
+            }
+            guard generation == requestGeneration else { throw CancellationError() }
             tokens = newTokens
             loaded = true
         } catch {
-            tokens = nil
-            loaded = true
+            guard generation == requestGeneration else { throw CancellationError() }
+            endSession(generation: requestGeneration)
+            throw AuthenticationError.credentialsUnavailable
+        }
+    }
+
+    private func mutateCredentials(
+        generation requestGeneration: Int,
+        _ mutation: @escaping @Sendable (any CredentialStoring) async throws -> Void
+    ) async throws {
+        guard generation == requestGeneration else { throw CancellationError() }
+        let previous = credentialMutation
+        let store = credentialStore
+        // Only storage mutations are queued, so replacement sign-in need not wait for HTTP.
+        let task = Task {
+            _ = await previous?.result
+            guard generation == requestGeneration else { throw CancellationError() }
+            try await mutation(store)
+        }
+        credentialMutation = task
+        do {
+            try await task.value
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
             throw AuthenticationError.credentialsUnavailable
         }
     }
 
     private func cancelRefresh() {
+        if refreshTask != nil {
+            // A replacement attempt must not revive a refresh already sent if sign-in fails.
+            tokens = nil
+            loaded = true
+        }
         refreshTask?.cancel()
         refreshTask = nil
+        refreshOperationID = nil
     }
 }
