@@ -3,6 +3,30 @@ import UIKit
 
 struct CreateTransactionView: View {
     let viewModel: CreateTransactionViewModel
+    let onSignOut: () -> Void
+
+    init(
+        viewModel: CreateTransactionViewModel,
+        onSignOut: @escaping () -> Void = {}
+    ) {
+        self.viewModel = viewModel
+        self.onSignOut = onSignOut
+    }
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private static let contentMaxWidth: CGFloat = 640
+
+    private var usesScrollablePrimaryAction: Bool {
+        dynamicTypeSize.isAccessibilitySize
+    }
+
+    private var primaryActionButton: some View {
+        CreateTransactionActionButton(
+            state: viewModel.state,
+            action: performPrimaryAction
+        )
+    }
 
     private var amountValidationError: CreateTransactionDisplayError? {
         guard case let .failure(error) = viewModel.state,
@@ -65,22 +89,59 @@ struct CreateTransactionView: View {
                         TransactionFeedbackView(feedback: transactionFeedback)
                     }
                 }
+
+                if usesScrollablePrimaryAction {
+                    Section {
+                        primaryActionButton
+                            .padding(.horizontal)
+                            .padding(.vertical, 12)
+                    }
+                }
             }
+            .frame(maxWidth: Self.contentMaxWidth)
+            .frame(maxWidth: .infinity)
             .navigationTitle("Create Transaction")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Sign Out", action: onSignOut)
+                }
+            }
             .scrollDismissesKeyboard(.interactively)
             .background {
                 KeyboardDismissalTapObserver(action: dismissKeyboard)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                CreateTransactionActionButton(
-                    state: viewModel.state,
-                    action: performPrimaryAction
-                )
-                .padding(.horizontal)
-                .padding(.vertical, 12)
+                if !usesScrollablePrimaryAction {
+                    primaryActionButton
+                        .frame(maxWidth: Self.contentMaxWidth)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal)
+                        .padding(.vertical, 12)
+                }
+            }
+            .onChange(of: viewModel.state) { _, state in
+                announceStatus(for: state)
             }
         }
+    }
+
+    private func announceStatus(for state: CreateTransactionViewState) {
+        let announcement: String
+
+        switch state {
+        case .success:
+            announcement = "Transaction created"
+        case let .failure(error):
+            announcement = error.message
+        case .idle, .validating, .submitting:
+            return
+        }
+
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: announcement
+        )
     }
 
     private func performPrimaryAction() {

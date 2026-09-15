@@ -17,14 +17,10 @@ struct ContentView: View {
             case .restoring:
                 ProgressView("Restoring session…")
             case .authenticated:
-                CreateTransactionView(viewModel: createTransactionViewModel)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("Sign Out") {
-                                Task { await authenticationViewModel.logout() }
-                            }
-                        }
-                    }
+                CreateTransactionView(
+                    viewModel: createTransactionViewModel,
+                    onSignOut: { Task { await authenticationViewModel.logout() } }
+                )
                     .sheet(isPresented: Binding(get: { authenticationViewModel.shouldOfferAppleLink }, set: { if !$0 { authenticationViewModel.dismissAppleLinkOffer() } })) {
                         AuthenticationView(viewModel: authenticationViewModel)
                     }

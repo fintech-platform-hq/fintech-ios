@@ -6,6 +6,7 @@
 //
 
 import XCTest
+import UIKit
 
 final class FintechUITests: XCTestCase {
     override func setUpWithError() throws {
@@ -21,6 +22,10 @@ final class FintechUITests: XCTestCase {
         XCTAssertTrue(
             navigationBar.waitForExistence(timeout: 2)
         )
+
+        let signOutButton = app.buttons["Sign Out"]
+        XCTAssertTrue(signOutButton.waitForExistence(timeout: 2))
+        XCTAssertTrue(signOutButton.isHittable)
 
         let amountField = app.textFields["createTransaction.amount"]
         let typePicker = app.segmentedControls["createTransaction.type"]
@@ -149,9 +154,40 @@ final class FintechUITests: XCTestCase {
     }
 
     @MainActor
+    func testInvalidAmountShowsExistingValidationStatus() throws {
+        let app = makeAuthenticatedApp()
+        app.launch()
+
+        let submitButton = app.buttons["createTransaction.submit"]
+        XCTAssertTrue(submitButton.waitForExistence(timeout: 2))
+
+        submitButton.tap()
+
+        let status = app.descendants(matching: .any)[
+            "createTransaction.status"
+        ]
+        XCTAssertTrue(status.waitForExistence(timeout: 2))
+        XCTAssertEqual(status.label, "Enter an amount.")
+    }
+
+    @MainActor
+    func testPrimaryActionUsesReadableWidthOnIPad() throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else {
+            throw XCTSkip("This layout assertion requires an iPad destination.")
+        }
+
+        let app = makeAuthenticatedApp()
+        app.launch()
+
+        let submitButton = app.buttons["createTransaction.submit"]
+        XCTAssertTrue(submitButton.waitForExistence(timeout: 2))
+        XCTAssertLessThanOrEqual(submitButton.frame.width, 640)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         measure(metrics: [XCTApplicationLaunchMetric()]) {
-            XCUIApplication().launch()
+            makeAuthenticatedApp().launch()
         }
     }
 
