@@ -14,24 +14,36 @@ struct FintechApp: App {
     @State private var createTransactionViewModel: CreateTransactionViewModel
 
     init() {
+        let environment: AppEnvironment
         let baseURL: URL
         let session: URLSession
         let credentialStore: any CredentialStoring
 
+        do {
+            environment = try AppEnvironment.resolve(
+                arguments: ProcessInfo.processInfo.arguments,
+                environment: ProcessInfo.processInfo.environment
+            )
+        } catch {
+            preconditionFailure("-staging requires a valid HTTPS FINTECH_STAGING_BASE_URL")
+        }
+
+        baseURL = environment.baseURL
 #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-ui-testing-authenticated") {
-            baseURL = URL(string: "http://127.0.0.1:1")!
+        if environment == .uiTesting {
             session = URLSession(configuration: .ephemeral)
             credentialStore = UITestCredentialStore()
-        } else {
-            baseURL = APIClient.productionBaseURL
+        } else if let keychainService = environment.keychainService {
             session = .shared
-            credentialStore = KeychainCredentialStore()
+            credentialStore = KeychainCredentialStore(service: keychainService)
+        } else {
+            preconditionFailure("Invalid app environment")
         }
 #else
-        baseURL = APIClient.productionBaseURL
         session = .shared
-        credentialStore = KeychainCredentialStore()
+        credentialStore = KeychainCredentialStore(
+            service: AppEnvironment.productionKeychainService
+        )
 #endif
 
         let unauthenticatedClient = APIClient(
