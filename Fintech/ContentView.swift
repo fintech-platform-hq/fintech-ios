@@ -9,7 +9,9 @@ import SwiftUI
 
 struct ContentView: View {
     let authenticationViewModel: AuthenticationViewModel
-    let createTransactionViewModel: CreateTransactionViewModel
+    let createTransactionViewModel: CreateTransactionViewModel?
+    let mvpAccountService: MvpAccountService?
+    let authenticationSession: AuthenticationSession
 
     var body: some View {
         Group {
@@ -17,13 +19,16 @@ struct ContentView: View {
             case .restoring:
                 ProgressView("Restoring session…")
             case .authenticated:
-                CreateTransactionView(
-                    viewModel: createTransactionViewModel,
-                    onSignOut: { Task { await authenticationViewModel.logout() } }
-                )
-                    .sheet(isPresented: Binding(get: { authenticationViewModel.shouldOfferAppleLink }, set: { if !$0 { authenticationViewModel.dismissAppleLinkOffer() } })) {
-                        AuthenticationView(viewModel: authenticationViewModel)
+                Group {
+                    if let mvpAccountService {
+                        MvpAccountView(service: mvpAccountService, session: authenticationSession, onSignOut: signOut)
+                    } else if let createTransactionViewModel {
+                        CreateTransactionView(viewModel: createTransactionViewModel, onSignOut: signOut)
                     }
+                }
+                .sheet(isPresented: Binding(get: { authenticationViewModel.shouldOfferAppleLink }, set: { if !$0 { authenticationViewModel.dismissAppleLinkOffer() } })) {
+                    AuthenticationView(viewModel: authenticationViewModel)
+                }
             case .unauthenticated, .authenticating, .failure:
                 AuthenticationView(viewModel: authenticationViewModel)
             }
@@ -34,5 +39,8 @@ struct ContentView: View {
         .task {
             await authenticationViewModel.observeSession()
         }
+    }
+    private func signOut() {
+        Task { await authenticationViewModel.logout() }
     }
 }

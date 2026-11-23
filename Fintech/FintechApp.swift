@@ -11,7 +11,9 @@ import SwiftUI
 @main
 struct FintechApp: App {
     @State private var authenticationViewModel: AuthenticationViewModel
-    @State private var createTransactionViewModel: CreateTransactionViewModel
+    @State private var createTransactionViewModel: CreateTransactionViewModel?
+    private let mvpAccountService: MvpAccountService?
+    private let authenticationSession: AuthenticationSession
 
     init() {
         let environment: AppEnvironment
@@ -29,17 +31,26 @@ struct FintechApp: App {
         }
 
         baseURL = environment.baseURL
+        let useMvpAccount: Bool
 #if DEBUG
+        if case .staging = environment {
+            useMvpAccount = ProcessInfo.processInfo.arguments.contains("-mvp-account")
+        } else {
+            useMvpAccount = false
+        }
         if environment == .uiTesting {
             session = URLSession(configuration: .ephemeral)
             credentialStore = UITestCredentialStore()
         } else if let keychainService = environment.keychainService {
             session = .shared
-            credentialStore = KeychainCredentialStore(service: keychainService)
+            credentialStore = KeychainCredentialStore(
+                service: useMvpAccount ? "\(keychainService).mvp.\(baseURL.absoluteString)" : keychainService
+            )
         } else {
             preconditionFailure("Invalid app environment")
         }
 #else
+        useMvpAccount = false
         session = .shared
         credentialStore = KeychainCredentialStore(
             service: AppEnvironment.productionKeychainService
@@ -62,7 +73,8 @@ struct FintechApp: App {
             session: session,
             authenticationSession: authenticationSession
         )
-        let transactionService = TransactionService(apiClient: authenticatedClient)
+        self.authenticationSession = authenticationSession
+        mvpAccountService = useMvpAccount ? MvpAccountService(apiClient: authenticatedClient) : nil
 
         _authenticationViewModel = State(
             initialValue: AuthenticationViewModel(
@@ -71,8 +83,8 @@ struct FintechApp: App {
             )
         )
         _createTransactionViewModel = State(
-            initialValue: CreateTransactionViewModel(
-                service: transactionService,
+            initialValue: useMvpAccount ? nil : CreateTransactionViewModel(
+                service: TransactionService(apiClient: authenticatedClient),
                 disposableDemoAccountID: DemoConfiguration
                     .disposableTransactionAccountID
             )
@@ -83,7 +95,9 @@ struct FintechApp: App {
         WindowGroup {
             ContentView(
                 authenticationViewModel: authenticationViewModel,
-                createTransactionViewModel: createTransactionViewModel
+                createTransactionViewModel: createTransactionViewModel,
+                mvpAccountService: mvpAccountService,
+                authenticationSession: authenticationSession
             )
         }
     }
