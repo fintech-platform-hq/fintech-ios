@@ -27,7 +27,7 @@ struct MvpChecksView: View {
                 }
                 let zone = summary.base.flatMap { TimeZone(identifier: $0.referenceZone) } ?? .current
                 ForEach(entries) { entry in
-                    Section(entry.status.title) {
+                    Section(entry.supersededBy == nil ? entry.status.title : "Conferência substituída") {
                         MvpCheckValues(
                             reference: entry.receipt.referenceAt, zone: zone, observed: entry.receipt.observedMinor,
                             calculated: entry.receipt.originalCalculatedMinor, difference: entry.receipt.originalDifferenceMinor
@@ -35,6 +35,25 @@ struct MvpChecksView: View {
                         MvpCheckAmount("Saldo recalculado no corte", minor: entry.calculatedAtReferenceMinor)
                         MvpCheckAmount("Divergência restante no corte", minor: entry.remainingDifferenceMinor, showSign: true)
                             .accessibilityIdentifier("mvp.check.remainingDifference")
+                        if let reason = entry.replacementReason {
+                            Text("Motivo da substituição: \(reason)")
+                        }
+                        if entry.replacesCheckId != nil {
+                            Text("Substitui uma observação anterior")
+                            if let author = entry.receipt.authorId { Text("Autor: \(author.uuidString)").font(.footnote) }
+                            if let instant = entry.receipt.createdAt {
+                                Text(instant, format: .dateTime.day().month().year().hour().minute().second())
+                                    .environment(\.timeZone, zone)
+                            }
+                        }
+                        if entry.supersededBy == nil, let base = summary.base {
+                            NavigationLink {
+                                MvpAuditView(model: model, accountID: accountID, action: .replaceCheck, check: entry,
+                                             coverageStart: base.coverageStart, zone: zone)
+                            } label: { Text("Substituir conferência") }
+                                .accessibilityIdentifier("mvp.audit.open.replace_check")
+                                .disabled(!model.canWrite)
+                        }
                         if entry.canRecover, let base = summary.base {
                             NavigationLink {
                                 MvpRecoveryView(model: model, entry: entry, base: base, zone: zone)
@@ -66,7 +85,7 @@ struct MvpChecksView: View {
         }
         .navigationTitle("Conferências e pendências")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(pendingOnly)-\(model.recoveryReceipt?.id.uuidString ?? "")") { await load(pending: pendingOnly) }
+        .task(id: "\(pendingOnly)-\(model.recoveryReceipt?.id.uuidString ?? "")-\(model.auditReceipt?.id.uuidString ?? "")") { await load(pending: pendingOnly) }
         .refreshable { await load(pending: pendingOnly) }
     }
 

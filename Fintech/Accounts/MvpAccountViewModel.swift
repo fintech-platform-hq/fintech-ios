@@ -24,6 +24,7 @@ final class MvpAccountViewModel {
     private(set) var preview: MvpOpening?
     private(set) var checkPreview: MvpCheckPreview?
     private(set) var recoveryReceipt: MvpRecoveryReceipt?
+    private(set) var auditReceipt: MvpAuditReceipt?
     private(set) var checkReceipt: MvpCheckReceipt?
     private(set) var entries: [MvpHistoryEntry] = []
     private(set) var nextCursor: String?
@@ -35,6 +36,7 @@ final class MvpAccountViewModel {
     var hasPendingOpening: Bool { pending?.operation == .opening }
     var hasPendingTransaction: Bool { pending?.operation == .transaction }
     var hasPendingRecovery: Bool { pending?.operation == .recovery }
+    var hasPendingAudit: Bool { pending?.operation == .audit }
     var hasPendingCheck: Bool { pending?.operation == .check }
     var canWrite: Bool { storageReady && pending == nil && !busy }
 
@@ -256,6 +258,44 @@ final class MvpAccountViewModel {
         }
     }
 
+    func previewAudit(_ input: MvpAuditInput) async throws -> MvpAuditPreview {
+        guard let generation else { throw CancellationError() }
+        let preview = try await service.previewAudit(input, generation: generation)
+        try await checkSession(generation)
+        guard preview.accountId == input.accountId, preview.targetId == input.targetId else {
+            throw APIError.invalidResponse
+        }
+        return preview
+    }
+
+    func loadMovementVersions(accountID: UUID, movementID: UUID) async throws -> [MvpMovementVersion] {
+        guard let generation else { throw CancellationError() }
+        let versions = try await service.movementVersions(accountID: accountID, movementID: movementID, generation: generation)
+        try await checkSession(generation)
+        return versions
+    }
+
+    func confirmAudit(_ confirmation: MvpAuditConfirmation) async -> Bool {
+        guard canWrite, let generation, let principalID else { return false }
+        busy = true
+        auditReceipt = nil
+        defer { busy = false }
+        do {
+            let intent = MvpIntent(
+                environment: service.environmentID, principalID: principalID, accountID: confirmation.input.accountId,
+                operation: .audit, key: UUID(), body: try APIClient.freeze(confirmation)
+            )
+            try await persist(intent, generation: generation)
+            await resolve(intent, generation: generation)
+            return auditReceipt != nil
+        } catch is CancellationError {
+            return false
+        } catch {
+            message = "Não foi possível proteger a alteração no dispositivo. Nenhum envio foi iniciado."
+            return false
+        }
+    }
+
     func startTransaction() {
         guard canWrite, case let .loaded(summary) = state, summary.status == .available,
               let accountID = summary.account?.id, let revision = summary.revision, let base = summary.base else { return }
@@ -363,6 +403,7 @@ final class MvpAccountViewModel {
             let transaction: TransactionResponse?
             let check: MvpCheckReceipt?
             var recovery: MvpRecoveryReceipt?
+            var audit: MvpAuditReceipt?
             let confirmation: String
             switch intent.operation {
             case .opening:
@@ -391,12 +432,22 @@ final class MvpAccountViewModel {
                 check = nil
                 recovery = receipt
                 confirmation = "Recuperação confirmada. A conferência foi atualizada."
+            case .audit:
+                let receipt: MvpAuditReceipt = try await service.send(intent, generation: generation, canSend: canSend)
+                guard receipt.accountId == intent.accountID, receipt.authorId == intent.principalID else {
+                    throw APIError.invalidResponse
+                }
+                transaction = nil
+                check = nil
+                audit = receipt
+                confirmation = "Alteração confirmada e registrada no histórico."
             }
 
             try await finish(intent, generation: generation)
             confirmedID = transaction?.id
             checkReceipt = check
             if let recovery { recoveryReceipt = recovery }
+            if let audit { auditReceipt = audit }
             message = confirmation
             selectedAccountID = nil
             _ = await read(generation: generation)
@@ -420,6 +471,8 @@ final class MvpAccountViewModel {
                     default:
                         message = "A recuperação precisa de uma nova prévia. Revise os dados e tente novamente."
                     }
+                } else if intent.operation == .audit {
+                    message = "A alteração precisa de nova revisão. Atualize os dados antes de confirmar."
                 } else if intent.operation == .check && failure == .mvpConflict(code: "OCCURRENCE_TIME_REQUIRED") {
                     message = "Um lançamento informado só por dia torna esse horário ambíguo. Escolha outro corte."
                 } else if intent.operation == .check {
@@ -446,6 +499,7 @@ final class MvpAccountViewModel {
                 .mvpConflict(code: "STALE_REVISION"), .mvpConflict(code: "BASE_REQUIRED"),
                 .mvpConflict(code: "MVP_ACCOUNT_EXISTS"), .mvpConflict(code: "LEGACY_ADOPTION_BLOCKED"),
                 .mvpConflict(code: "OCCURRENCE_TIME_REQUIRED"),
+                .mvpConflict(code: "AUDIT_PREVIEW_REQUIRED"), .mvpConflict(code: "AUDIT_TARGET_INACTIVE"),
                 .mvpConflict(code: "EXTERNAL_REFERENCE_CONFLICT"),
                 .mvpConflict(code: "MOVEMENT_ALREADY_LINKED"), .mvpConflict(code: "MOVEMENT_INELIGIBLE"):
             true

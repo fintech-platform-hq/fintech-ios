@@ -369,7 +369,7 @@ private struct MvpRecoveryHistory: View {
         defer { loading = false }
         do {
             let page = try await model.loadRecoveryHistory(accountID: accountID, cursor: cursor, revision: revision)
-            entries += page.entries.filter { $0.type == .expense && $0.coverage == .covered && $0.occurredAt <= reference }
+            entries += page.entries.filter { $0.type == .expense && $0.auditAction != "invalidate" && $0.coverage == .covered && $0.occurredAt <= reference }
             cursor = page.nextCursor
             error = nil
         } catch is CancellationError {

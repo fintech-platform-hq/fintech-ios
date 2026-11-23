@@ -47,7 +47,7 @@ struct MvpAccountView: View {
 
                 submissionStatus
                 if case let .loaded(summary) = viewModel.state, summary.account != nil {
-                    history(zone: summary.base.flatMap { TimeZone(identifier: $0.referenceZone) } ?? zone)
+                    history(summary: summary, zone: summary.base.flatMap { TimeZone(identifier: $0.referenceZone) } ?? zone)
                 }
             }
             .navigationTitle("Conta pessoal")
@@ -179,7 +179,7 @@ struct MvpAccountView: View {
 
     @ViewBuilder
     private var submissionStatus: some View {
-        let isPending = viewModel.hasPendingOpening || viewModel.hasPendingTransaction || viewModel.hasPendingCheck || viewModel.hasPendingRecovery
+        let isPending = viewModel.hasPendingOpening || viewModel.hasPendingTransaction || viewModel.hasPendingCheck || viewModel.hasPendingRecovery || viewModel.hasPendingAudit
         if isPending || viewModel.message != nil || viewModel.confirmedID != nil {
             Section("Envio") {
                 if isPending {
@@ -207,40 +207,53 @@ struct MvpAccountView: View {
         }
     }
 
-    private func history(zone: TimeZone) -> some View {
+    private func history(summary: MvpAccountSummary, zone: TimeZone) -> some View {
         Section("Histórico") {
             if viewModel.entries.isEmpty {
                 Text("Nenhum lançamento confirmado.")
             }
             ForEach(viewModel.entries) { entry in
-                VStack(alignment: .leading, spacing: 4) {
-                    let income = entry.type == .income
-                    Text(income ? "Receita" : "Despesa")
-                    Text(income
-                        ? "+\(MvpAccountViewModel.money(entry.amountMinor))"
-                        : MvpAccountViewModel.money("-\(entry.amountMinor)"))
-                        .monospacedDigit()
-                    if let day = entry.occurrenceDay {
-                        Text("Dia \(day), sem hora informada")
-                    } else {
-                        Text(dateLabel(entry.occurredAt, in: zone))
-                    }
-                    if let description = entry.description { Text(description) }
-                    switch entry.coverage {
-                    case .covered: EmptyView()
-                    case .beforeBase: Text("Anterior ao início da cobertura")
-                    case .afterCut: Text("Posterior ao horário consultado")
-                    case .noBase: Text("Conta sem base confirmada")
-                    }
+                if let base = summary.base, let accountID = summary.account?.id {
+                    NavigationLink {
+                        MvpMovementAuditView(model: viewModel, entry: entry, accountID: accountID,
+                                             coverageStart: base.coverageStart, zone: zone)
+                    } label: { historyRow(entry, zone: zone) }
+                        .accessibilityIdentifier("mvp.history.entry")
+                } else {
+                    historyRow(entry, zone: zone).accessibilityIdentifier("mvp.history.entry")
                 }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("mvp.history.entry")
             }
             if viewModel.nextCursor != nil {
                 Button("Carregar mais lançamentos") { Task { await viewModel.loadMore() } }
                     .disabled(viewModel.busy)
             }
         }
+    }
+
+    private func historyRow(_ entry: MvpHistoryEntry, zone: TimeZone) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            let income = entry.type == .income
+            Text(income ? "Receita" : "Despesa")
+            Text(income
+                ? "+\(MvpAccountViewModel.money(entry.amountMinor))"
+                : MvpAccountViewModel.money("-\(entry.amountMinor)"))
+                .monospacedDigit()
+            if let day = entry.occurrenceDay {
+                Text("Dia \(day), sem hora informada")
+            } else {
+                Text(dateLabel(entry.occurredAt, in: zone))
+            }
+            if let description = entry.description { Text(description) }
+            if entry.auditAction == "invalidate" { Text("Invalidado, sem efeito no saldo") }
+            if entry.auditAction == "correct" { Text("Corrigido") }
+            switch entry.coverage {
+            case .covered: EmptyView()
+            case .beforeBase: Text("Anterior ao início da cobertura")
+            case .afterCut: Text("Posterior ao horário consultado")
+            case .noBase: Text("Conta sem base confirmada")
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder

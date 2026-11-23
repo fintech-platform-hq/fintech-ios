@@ -7,6 +7,7 @@ nonisolated struct MvpIntent: Codable, Equatable, Sendable {
         case transaction = "/mvp/transactions"
         case check = "/mvp/checks"
         case recovery = "/mvp/recoveries"
+        case audit = "/mvp/audited-changes"
     }
 
     let environment: String

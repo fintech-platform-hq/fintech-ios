@@ -316,6 +316,195 @@ final class MvpAccountIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testI4CorrectionRecoversAfterRelaunchOverHTTPS() async throws {
+        guard ProcessInfo.processInfo.environment["FINTECH_I4_HTTPS_TEST"] == "1" else {
+            throw XCTSkip("Requires the disposable I4 HTTPS fixture.")
+        }
+        continueAfterFailure = false
+        let app = launchI4()
+        if app.buttons["Sair"].waitForExistence(timeout: 2) { tap(app.buttons["Sair"]) }
+        signIn(app, email: "i4-a@example.test", password: "fictional i4 password")
+        let balance = app.staticTexts["mvp.account.balance"]
+        waitForLabel(balance, "R$ 782,00")
+        let standardHeight = balance.frame.height
+
+        openI4Movement(app, named: "Padaria I4")
+        tap(app.buttons["mvp.audit.open.correct"])
+        typeI4Audit(app, amount: "24,00", reason: "Valor do comprovante")
+        let projected = app.descendants(matching: .any)["mvp.audit.projectedBalance"]
+        show(app, projected)
+        XCTAssertEqual(projected.value as? String, "R$ 783,00")
+        let projectedDifference = app.descendants(matching: .any)["mvp.audit.projectedDifference"]
+        show(app, projectedDifference)
+        XCTAssertEqual(projectedDifference.value as? String, "mais R$ 1,00")
+        let confirm = app.buttons["mvp.audit.confirm"]
+        show(app, confirm)
+        tap(confirm)
+        let replayURL = try XCTUnwrap(URL(string: "https://localhost:55456/__i4/replay"))
+        var interrupted = false
+        for _ in 0..<30 {
+            let (status, _) = try await URLSession.shared.data(from: replayURL)
+            if String(decoding: status, as: UTF8.self) == "interrupted" {
+                interrupted = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        XCTAssertTrue(interrupted, "The proxy must drop the response after commit before terminating the app.")
+        app.terminate()
+
+        var release = URLRequest(url: try XCTUnwrap(URL(string: "https://localhost:55456/__i4/release")))
+        release.httpMethod = "POST"
+        let (_, releaseResponse) = try await URLSession.shared.data(for: release)
+        XCTAssertEqual((releaseResponse as? HTTPURLResponse)?.statusCode, 204)
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        waitForLabel(balance, "R$ 783,00")
+        XCTAssertGreaterThan(balance.frame.height, standardHeight)
+        var replayed = false
+        for _ in 0..<40 {
+            let (proof, _) = try await URLSession.shared.data(from: replayURL)
+            if String(decoding: proof, as: UTF8.self) == "verified" {
+                replayed = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        XCTAssertTrue(replayed)
+
+        openI4Checks(app)
+        let original = app.descendants(matching: .any)["mvp.check.originalDifference"]
+        show(app, original)
+        XCTAssertEqual(original.value as? String, "mais R$ 45,00")
+        let residual = app.descendants(matching: .any)["mvp.check.remainingDifference"]
+        show(app, residual)
+        XCTAssertEqual(residual.value as? String, "mais R$ 1,00")
+        try app.performAccessibilityAudit(for: [.dynamicType, .sufficientElementDescription])
+        attachScreen(app, named: "I4 S03: R$ 1 reaberto, original R$ 45, Dynamic Type máximo")
+    }
+
+    @MainActor
+    func testI4InvalidatesAndReplacesOverHTTPS() throws {
+        guard ProcessInfo.processInfo.environment["FINTECH_I4_HTTPS_TEST"] == "1" else {
+            throw XCTSkip("Requires the disposable I4 HTTPS fixture.")
+        }
+        continueAfterFailure = false
+        let app = launchI4()
+        if app.buttons["Sair"].waitForExistence(timeout: 2) { tap(app.buttons["Sair"]) }
+        signIn(app, email: "i4-b@example.test", password: "fictional i4 password")
+        waitForLabel(app.staticTexts["mvp.account.balance"], "R$ 782,00")
+        openI4Movement(app, named: "Despesa duplicada I4")
+        tap(app.buttons["mvp.audit.open.invalidate"])
+        typeI4Audit(app, amount: nil, reason: "Lancamento duplicado")
+        let projected = app.descendants(matching: .any)["mvp.audit.projectedBalance"]
+        show(app, projected)
+        XCTAssertEqual(projected.value as? String, "R$ 802,00")
+        let confirm = app.buttons["mvp.audit.confirm"]
+        show(app, confirm)
+        tap(confirm)
+        let invalidated = app.descendants(matching: .any).matching(identifier: "mvp.audit.version.invalidate").firstMatch
+        show(app, invalidated)
+        XCTAssertTrue(invalidated.label.contains("Lancamento duplicado"))
+        tap(app.navigationBars.firstMatch.buttons.firstMatch)
+        waitForLabel(app.staticTexts["mvp.account.balance"], "R$ 802,00")
+
+        openI4Checks(app)
+        let remaining = app.descendants(matching: .any)["mvp.check.remainingDifference"]
+        show(app, remaining)
+        XCTAssertEqual(remaining.value as? String, "mais R$ 20,00")
+        let replace = app.buttons.matching(identifier: "mvp.audit.open.replace_check").firstMatch
+        show(app, replace)
+        tap(replace)
+        typeI4Audit(app, amount: "819,00", reason: "Erro de digitacao")
+        show(app, confirm)
+        tap(confirm)
+        let replaced = app.staticTexts["Conferência substituída"]
+        show(app, replaced)
+        attachScreen(app, named: "I4: conferência original preservada após substituição")
+    }
+
+#if compiler(>=6.4)
+    @MainActor
+    func testI4VoiceOverReadsTheReopenedDifference() throws {
+        guard ProcessInfo.processInfo.environment["FINTECH_I4_VOICEOVER_TEST"] == "1", #available(iOS 27.0, *) else {
+            throw XCTSkip("Requires iOS 27 and the completed I4 correction fixture.")
+        }
+        continueAfterFailure = false
+        let app = launchI4()
+        if !app.buttons["Sair"].waitForExistence(timeout: 2) {
+            signIn(app, email: "i4-a@example.test", password: "fictional i4 password")
+        }
+        waitForLabel(app.staticTexts["mvp.account.balance"], "R$ 783,00")
+        openI4Checks(app)
+        XCTAssertTrue(app.descendants(matching: .any)["mvp.check.currentBalance"].waitForExistence(timeout: 10))
+        let voiceOver = XCUIDevice.shared.voiceOverService
+        try voiceOver.enable()
+        defer { try? voiceOver.disable() }
+        var expected = [
+            ["Saldo calculado atual", "783"],
+            ["Divergência original", "mais", "45"],
+            ["Divergência restante no corte", "mais", "1"],
+        ]
+        var spoken: [String] = []
+        for _ in 0..<40 {
+            let utterance = try voiceOver.moveForward().utterance
+            spoken.append(utterance)
+            if let next = expected.first, next.allSatisfy({ utterance.localizedCaseInsensitiveContains($0) }) {
+                expected.removeFirst()
+                if expected.isEmpty { break }
+            }
+        }
+        let evidence = XCTAttachment(string: spoken.joined(separator: "\n"))
+        evidence.name = "I4 VoiceOver utterances"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+        XCTAssertTrue(expected.isEmpty, spoken.joined(separator: " | "))
+    }
+#endif
+
+    @MainActor
+    private func launchI4() -> XCUIApplication {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-staging", "-mvp-account"]
+        app.launchEnvironment["FINTECH_STAGING_BASE_URL"] = "https://localhost:55456"
+        app.launch()
+        return app
+    }
+
+    @MainActor
+    private func openI4Movement(_ app: XCUIApplication, named name: String) {
+        let row = app.buttons.matching(identifier: "mvp.history.entry")
+            .matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
+        show(app, row)
+        tap(row)
+    }
+
+    @MainActor
+    private func openI4Checks(_ app: XCUIApplication) {
+        let checks = app.descendants(matching: .any).matching(identifier: "mvp.checks.open").firstMatch
+        show(app, checks)
+        tap(checks)
+    }
+
+    @MainActor
+    private func typeI4Audit(_ app: XCUIApplication, amount: String?, reason: String) {
+        if let amount {
+            let field = app.textFields["mvp.audit.amount"]
+            show(app, field)
+            tap(field)
+            field.typeText(amount)
+        }
+        let field = app.descendants(matching: .any).matching(identifier: "mvp.audit.reason").firstMatch
+        show(app, field)
+        tap(field)
+        field.typeText(reason)
+        let preview = app.buttons["mvp.audit.preview"]
+        show(app, preview)
+        tap(preview)
+    }
+
+    @MainActor
     private func openRecovery(_ app: XCUIApplication) {
         let recovery = app.descendants(matching: .any).matching(identifier: "mvp.recovery.open").firstMatch
         show(app, recovery)
