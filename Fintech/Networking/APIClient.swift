@@ -17,11 +17,23 @@ nonisolated struct APIClient: Sendable {
         self.authenticationSession = authenticationSession
     }
 
+    func get<Response>(
+        path: String,
+        expectedGeneration: Int
+    ) async throws -> Response where Response: Decodable & Sendable {
+        let data = try await execute(
+            path: path, method: "GET", body: nil, headers: [:],
+            expectedStatusCode: 200, expectedGeneration: expectedGeneration
+        )
+        return try decode(data)
+    }
+
     func post<Request, Response>(
         path: String,
         body: Request,
         headers: [String: String],
-        expectedStatusCode: Int
+        expectedStatusCode: Int,
+        expectedGeneration: Int? = nil
     ) async throws -> Response
     where Request: Encodable & Sendable, Response: Decodable & Sendable {
         let data: Data
@@ -37,11 +49,15 @@ nonisolated struct APIClient: Sendable {
             method: "POST",
             body: data,
             headers: headers,
-            expectedStatusCode: expectedStatusCode
+            expectedStatusCode: expectedStatusCode,
+            expectedGeneration: expectedGeneration
         )
+        return try decode(responseData)
+    }
 
+    private func decode<Response: Decodable>(_ data: Data) throws -> Response {
         do {
-            return try APICoding.makeDecoder().decode(Response.self, from: responseData)
+            return try APICoding.makeDecoder().decode(Response.self, from: data)
         } catch {
             throw APIError.decoding
         }
@@ -74,9 +90,10 @@ nonisolated struct APIClient: Sendable {
     private func execute(
         path: String,
         method: String,
-        body: Data,
+        body: Data?,
         headers: [String: String],
-        expectedStatusCode: Int
+        expectedStatusCode: Int,
+        expectedGeneration: Int? = nil
     ) async throws -> Data {
         let url = path
             .split(separator: "/", omittingEmptySubsequences: true)
@@ -85,7 +102,9 @@ nonisolated struct APIClient: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if body != nil {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
 
         for (field, value) in headers {
             request.setValue(value, forHTTPHeaderField: field)
@@ -93,7 +112,7 @@ nonisolated struct APIClient: Sendable {
 
         let firstToken: String?
         if let authenticationSession, path != "/auth/apple/link" {
-            let token = try await authenticationSession.accessToken()
+            let token = try await authenticationSession.accessToken(expectedGeneration: expectedGeneration)
             firstToken = token
             request.setValue(
                 "Bearer \(token)",
@@ -103,7 +122,9 @@ nonisolated struct APIClient: Sendable {
             firstToken = nil
         }
 
+        try await checkGeneration(expectedGeneration)
         let firstResponse = try await send(request)
+        try await checkGeneration(expectedGeneration)
         guard firstResponse.response.statusCode == 401,
               let authenticationSession,
               let firstToken else {
@@ -118,7 +139,9 @@ nonisolated struct APIClient: Sendable {
         let refreshedToken: String
         do {
             refreshedToken = try await authenticationSession
-                .accessToken(afterUnauthorizedFor: firstToken)
+                .accessToken(afterUnauthorizedFor: firstToken, expectedGeneration: expectedGeneration)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch AuthenticationError.refreshUnavailable {
             throw APIError.refreshUnavailable
         } catch AuthenticationError.reauthenticationRequired {
@@ -132,10 +155,12 @@ nonisolated struct APIClient: Sendable {
             "Bearer \(refreshedToken)",
             forHTTPHeaderField: "Authorization"
         )
+        try await checkGeneration(expectedGeneration)
         let retryResponse = try await send(retry)
+        try await checkGeneration(expectedGeneration)
 
         if retryResponse.response.statusCode == 401 {
-            await authenticationSession.invalidate()
+            await authenticationSession.invalidate(expectedGeneration: expectedGeneration)
         }
 
         return try validatedData(
@@ -143,6 +168,15 @@ nonisolated struct APIClient: Sendable {
             response: retryResponse.response,
             expectedStatusCode: expectedStatusCode
         )
+    }
+
+    private func checkGeneration(_ expectedGeneration: Int?) async throws {
+        guard let expectedGeneration else { return }
+        guard let authenticationSession,
+              await authenticationSession.hasActiveSession(generation: expectedGeneration) else {
+            throw CancellationError()
+        }
+        try Task.checkCancellation()
     }
 
     private func send(_ request: URLRequest) async throws -> (data: Data, response: HTTPURLResponse) {

@@ -222,6 +222,7 @@ final class AuthenticationViewModel {
         linkingState = .none
         let operationID = UUID()
         activeOperationID = operationID
+        state = .unauthenticated
         await session.logout()
         guard activeOperationID == operationID else { return }
         password = ""

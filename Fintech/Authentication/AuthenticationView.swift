@@ -74,6 +74,7 @@ struct AuthenticationView: View {
                             else { await viewModel.register() }
                         }
                     }
+                    .accessibilityIdentifier("authentication.submit")
                     .disabled(viewModel.operationInProgress)
                 }
 

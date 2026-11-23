@@ -89,6 +89,10 @@ actor AuthenticationSession {
 
     func isCurrent(_ expectedGeneration: Int) -> Bool { generation == expectedGeneration }
 
+    func hasActiveSession(generation expectedGeneration: Int) -> Bool {
+        generation == expectedGeneration && tokens != nil
+    }
+
     func appleLinkSession() throws -> AppleLinkSession {
         guard tokens != nil, let passwordEmail else {
             throw AuthenticationError.request(.http(statusCode: 403, message: nil))
@@ -121,8 +125,9 @@ actor AuthenticationSession {
         try await signInWithApple(authorization)
     }
 
-    func accessToken() async throws -> String {
+    func accessToken(expectedGeneration: Int? = nil) async throws -> String {
         try await loadIfNeeded()
+        if let expectedGeneration, generation != expectedGeneration { throw CancellationError() }
         guard let accessToken = tokens?.accessToken else {
             throw AuthenticationError.unauthenticated
         }
@@ -131,10 +136,12 @@ actor AuthenticationSession {
 
     func accessToken(
         afterUnauthorizedFor rejectedToken: String,
+        expectedGeneration: Int? = nil,
         onRefreshWait: @Sendable (UUID) -> Void = { _ in }
     ) async throws -> String {
         try await loadIfNeeded()
 
+        if let expectedGeneration, generation != expectedGeneration { throw CancellationError() }
         guard let currentTokens = tokens else {
             throw AuthenticationError.unauthenticated
         }
@@ -230,7 +237,8 @@ actor AuthenticationSession {
         }
     }
 
-    func invalidate() async {
+    func invalidate(expectedGeneration: Int? = nil) async {
+        if let expectedGeneration, generation != expectedGeneration { return }
         passwordEmail = nil
         linkOperationID = nil
         generation += 1
