@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct MvpAccountView: View {
     @State private var viewModel: MvpAccountViewModel
@@ -6,13 +7,20 @@ struct MvpAccountView: View {
     @State private var start = Date.now
     @State private var isOpening = false
     @FocusState private var amountFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private let zone = TimeZone.current
     private let locale = Locale(identifier: "pt_BR")
     let onSignOut: () -> Void
 
-    init(service: MvpAccountService, session: AuthenticationSession, onSignOut: @escaping () -> Void) {
-        _viewModel = State(initialValue: MvpAccountViewModel(service: service, session: session))
+    init(service: MvpAccountService, session: AuthenticationSession, store: MvpIntentStore, onSignOut: @escaping () -> Void) {
+        _viewModel = State(initialValue: MvpAccountViewModel(
+            service: service, session: session, store: store,
+            canSend: {
+                UIApplication.shared.applicationState == .active && UIApplication.shared.isProtectedDataAvailable
+            }
+        ))
         self.onSignOut = onSignOut
     }
 
@@ -25,26 +33,57 @@ struct MvpAccountView: View {
                 case .failed:
                     Section {
                         Text("Não foi possível consultar sua conta.")
-                        Button("Tentar novamente") { Task { await viewModel.load() } }
+                        reloadButton
+                    }
+                case .unavailable:
+                    Section {
+                        Text("Saldo e histórico temporariamente indisponíveis.")
+                        reloadButton
                     }
                 case let .loaded(summary):
                     accountContent(summary)
                 }
 
-                if let message = viewModel.message {
-                    Text(message)
-                        .accessibilityIdentifier("mvp.account.message")
+                submissionStatus
+                if case let .loaded(summary) = viewModel.state, summary.account != nil {
+                    history(zone: summary.base.flatMap { TimeZone(identifier: $0.referenceZone) } ?? zone)
                 }
             }
             .navigationTitle("Conta pessoal")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Sair", action: onSignOut)
+                    if dynamicTypeSize.isAccessibilitySize {
+                        Button("Sair", systemImage: "rectangle.portrait.and.arrow.right", action: onSignOut)
+                            .labelStyle(.iconOnly)
+                            .accessibilityShowsLargeContentViewer()
+                    } else {
+                        Button("Sair", action: onSignOut)
+                    }
                 }
             }
-            .refreshable { await viewModel.load() }
+            .refreshable { await viewModel.load(recover: true, keepSelection: true) }
+            .sheet(isPresented: Binding(
+                get: { viewModel.transactionForm != nil },
+                set: { if !$0 { viewModel.transactionForm = nil } }
+            )) {
+                if let form = viewModel.transactionForm,
+                   case let .loaded(summary) = viewModel.state, let base = summary.base {
+                    CreateTransactionView(
+                        viewModel: form,
+                        occurrenceRange: base.coverageStart...max(base.coverageStart, Date.now),
+                        occurrenceZone: TimeZone(identifier: base.referenceZone),
+                        onClose: { viewModel.transactionForm = nil }
+                    )
+                }
+            }
         }
-        .task { await viewModel.load() }
+        .task(id: scenePhase) {
+            guard scenePhase == .active, viewModel.transactionForm == nil else { return }
+            await viewModel.load(recover: true, keepSelection: true)
+        }
+        .onChange(of: viewModel.message) { _, message in
+            if let message { UIAccessibility.post(notification: .announcement, argument: message) }
+        }
     }
 
     @ViewBuilder
@@ -57,6 +96,7 @@ struct MvpAccountView: View {
                 Section {
                     Text("Você ainda não tem uma conta pessoal ativa.")
                     Button("Abrir conta pessoal em reais") { isOpening = true }
+                        .disabled(!viewModel.canWrite)
                 }
                 if !summary.legacyAccounts.isEmpty {
                     Section("Contas existentes") {
@@ -93,6 +133,76 @@ struct MvpAccountView: View {
                     LabeledContent("Início da cobertura", value: coverageLabel(base.coverageStart, in: base.referenceZone))
                 }
             }
+            Section {
+                Button("Registrar lançamento") { viewModel.startTransaction() }
+                    .disabled(!viewModel.canWrite)
+            }
+        }
+    }
+
+    private var reloadButton: some View {
+        Button("Tentar novamente") { Task { await viewModel.load(recover: true, keepSelection: true) } }
+    }
+
+    @ViewBuilder
+    private var submissionStatus: some View {
+        let isPending = viewModel.hasPendingOpening || viewModel.hasPendingTransaction
+        if isPending || viewModel.message != nil || viewModel.confirmedID != nil {
+            Section("Envio") {
+                if isPending {
+                    if viewModel.busy {
+                        ProgressView("Consultando confirmação do envio…")
+                    } else {
+                        Text(viewModel.message ?? "Envio pendente de confirmação.")
+                            .accessibilityIdentifier("mvp.intent.pending")
+                        Button("Recuperar envio") { Task { await viewModel.retry() } }
+                            .accessibilityIdentifier("mvp.intent.retry")
+                    }
+                } else if let message = viewModel.message {
+                    Text(message).accessibilityIdentifier("mvp.account.message")
+                }
+                if let id = viewModel.confirmedID {
+                    VStack(alignment: .leading) {
+                        Text("Identificador do lançamento")
+                        Text(id.uuidString)
+                            .font(.footnote.monospaced())
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("mvp.transaction.confirmedID")
+                    }
+                }
+            }
+        }
+    }
+
+    private func history(zone: TimeZone) -> some View {
+        Section("Histórico") {
+            if viewModel.entries.isEmpty {
+                Text("Nenhum lançamento confirmado.")
+            }
+            ForEach(viewModel.entries) { entry in
+                VStack(alignment: .leading, spacing: 4) {
+                    let income = entry.type == .income
+                    Text(income ? "Receita" : "Despesa")
+                    Text(income
+                        ? "+\(MvpAccountViewModel.money(entry.amountMinor))"
+                        : MvpAccountViewModel.money("-\(entry.amountMinor)"))
+                        .monospacedDigit()
+                    Text(dateLabel(entry.occurredAt, in: zone))
+                    if let description = entry.description { Text(description) }
+                    switch entry.coverage {
+                    case .covered: EmptyView()
+                    case .beforeBase: Text("Anterior ao início da cobertura")
+                    case .afterCut: Text("Posterior ao horário consultado")
+                    case .noBase: Text("Conta sem base confirmada")
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("mvp.history.entry")
+            }
+            if viewModel.nextCursor != nil {
+                Button("Carregar mais lançamentos") { Task { await viewModel.loadMore() } }
+                    .disabled(viewModel.busy)
+            }
         }
     }
 
@@ -105,11 +215,9 @@ struct MvpAccountView: View {
                 Text("O saldo inicial deve refletir o momento imediatamente anterior ao início da cobertura.")
                 if viewModel.busy {
                     ProgressView("Confirmando abertura…")
-                } else if viewModel.hasPendingOpening {
-                    Button("Tentar confirmar novamente") { Task { await viewModel.confirm() } }
-                    Button("Consultar conta") { Task { await viewModel.checkPendingAccount() } }
                 } else {
                     Button("Confirmar abertura") { Task { await viewModel.confirm() } }
+                        .disabled(!viewModel.canWrite)
                     Button("Editar base") { viewModel.edit() }
                 }
             }
@@ -131,6 +239,7 @@ struct MvpAccountView: View {
                         let minute = Date(timeIntervalSince1970: floor(start.timeIntervalSince1970 / 60) * 60)
                         Task { await viewModel.review(amount: amount, start: minute, zone: zone) }
                     }
+                    .disabled(!viewModel.canWrite)
                     Button("Cancelar", role: .cancel) { isOpening = false }
                 }
             }

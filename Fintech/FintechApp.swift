@@ -13,6 +13,7 @@ struct FintechApp: App {
     @State private var authenticationViewModel: AuthenticationViewModel
     @State private var createTransactionViewModel: CreateTransactionViewModel?
     private let mvpAccountService: MvpAccountService?
+    private let mvpIntentStore = MvpIntentStore()
     private let authenticationSession: AuthenticationSession
 
     init() {
@@ -97,7 +98,8 @@ struct FintechApp: App {
                 authenticationViewModel: authenticationViewModel,
                 createTransactionViewModel: createTransactionViewModel,
                 mvpAccountService: mvpAccountService,
-                authenticationSession: authenticationSession
+                authenticationSession: authenticationSession,
+                mvpIntentStore: mvpIntentStore
             )
         }
     }
