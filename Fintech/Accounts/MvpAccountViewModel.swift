@@ -22,6 +22,8 @@ final class MvpAccountViewModel {
     private var storageReady = false
     private(set) var state: State = .loading
     private(set) var preview: MvpOpening?
+    private(set) var checkPreview: MvpCheckPreview?
+    private(set) var checkReceipt: MvpCheckReceipt?
     private(set) var entries: [MvpHistoryEntry] = []
     private(set) var nextCursor: String?
     private(set) var confirmedID: UUID?
@@ -31,6 +33,7 @@ final class MvpAccountViewModel {
 
     var hasPendingOpening: Bool { pending?.operation == .opening }
     var hasPendingTransaction: Bool { pending?.operation == .transaction }
+    var hasPendingCheck: Bool { pending?.operation == .check }
     var canWrite: Bool { storageReady && pending == nil && !busy }
 
     init(
@@ -144,10 +147,79 @@ final class MvpAccountViewModel {
         }
     }
 
+    func editCheck() {
+        guard canWrite else { return }
+        checkPreview = nil
+        checkReceipt = nil
+        message = nil
+    }
+
+    func reviewCheck(amount: String, reference: Date) async {
+        guard canWrite, let generation else { return }
+        guard let observedMinor = Self.parseMinor(amount) else {
+            message = "Informe um valor em reais com até duas casas decimais."
+            return
+        }
+        busy = true
+        defer { busy = false }
+        message = nil
+        do {
+            switch state {
+            case .loaded: break
+            case .loading, .unavailable, .failed: _ = await read(generation: generation)
+            }
+            guard case let .loaded(summary) = state, summary.status == .available,
+                  let accountID = summary.account?.id else {
+                message = "Não foi possível consultar a conta. Seus dados continuam no formulário. Tente novamente."
+                return
+            }
+            let input = MvpCheckInput(accountId: accountID, observedMinor: String(observedMinor), referenceAt: reference)
+            let result = try await service.previewCheck(input, generation: generation)
+            try await checkSession(generation)
+            guard result.accountId == accountID else { throw APIError.invalidResponse }
+            checkPreview = result
+        } catch is CancellationError {
+            return
+        } catch APIError.badRequest {
+            message = "Escolha uma data e hora entre o início da cobertura e agora."
+        } catch {
+            message = "Não foi possível consultar a conferência. Seus dados continuam no formulário. Tente novamente."
+        }
+    }
+
+    func confirmCheck() async {
+        guard canWrite, let generation, let principalID, let checkPreview else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let intent = MvpIntent(
+                environment: service.environmentID, principalID: principalID, accountID: checkPreview.accountId,
+                operation: .check, key: UUID(), body: try APIClient.freeze(MvpCheckConfirmation(preview: checkPreview))
+            )
+            try await persist(intent, generation: generation)
+            await resolve(intent, generation: generation)
+        } catch is CancellationError {
+            return
+        } catch {
+            message = "Não foi possível proteger a conferência no dispositivo. Nenhum envio foi iniciado."
+        }
+    }
+
+    func loadChecks(accountID: UUID, pendingOnly: Bool, after: UUID? = nil, revision: String? = nil) async throws -> MvpChecksPage {
+        guard let generation else { throw CancellationError() }
+        let page = try await service.checks(
+            accountID: accountID, pendingOnly: pendingOnly, after: after, revision: revision, generation: generation
+        )
+        try await identify(page.summary, generation: generation)
+        guard page.summary.account?.id == accountID else { throw APIError.invalidResponse }
+        return page
+    }
+
     func startTransaction() {
         guard canWrite, case let .loaded(summary) = state, summary.status == .available,
               let accountID = summary.account?.id, let revision = summary.revision, let base = summary.base else { return }
         confirmedID = nil
+        checkReceipt = nil
         transactionForm = CreateTransactionViewModel(
             service: MvpFormSubmission { [weak self] request, key in
                 guard let self else { throw CancellationError() }
@@ -162,7 +234,7 @@ final class MvpAccountViewModel {
         guard let generation, let pending, storageReady, !busy else { return }
         busy = true
         defer { busy = false }
-        if pending.operation == .transaction {
+        if pending.accountID != nil {
             selectedAccountID = nil
             guard await read(generation: generation) != nil else { return }
         }
@@ -239,27 +311,43 @@ final class MvpAccountViewModel {
                   intent.environment == service.environmentID else { return nil }
             message = nil
 
+            if intent.operation != .opening {
+                guard let target = intent.accountID, case let .loaded(summary) = state,
+                      summary.status == .available, summary.account?.id == target else {
+                    message = "O envio pendente aguarda a consulta da conta vinculada."
+                    return nil
+                }
+            }
+
             let transaction: TransactionResponse?
+            let check: MvpCheckReceipt?
+            let confirmation: String
             switch intent.operation {
             case .opening:
                 guard intent.accountID == nil else { return nil }
                 let summary: MvpAccountSummary = try await service.send(intent, generation: generation, canSend: canSend)
                 try await identify(summary, generation: generation)
                 transaction = nil
+                check = nil
+                confirmation = "Conta confirmada."
             case .transaction:
-                guard case let .loaded(summary) = state, let accountID = summary.account?.id,
-                      accountID == intent.accountID, summary.revision != nil else {
-                    message = "O envio pendente aguarda a consulta da conta vinculada."
-                    return nil
-                }
                 let receipt: MvpTransactionReceipt = try await service.send(intent, generation: generation, canSend: canSend)
-                guard receipt.accountId == accountID, let value = receipt.transaction else { throw APIError.invalidResponse }
+                guard receipt.accountId == intent.accountID, let value = receipt.transaction else { throw APIError.invalidResponse }
                 transaction = value
+                check = nil
+                confirmation = "Lançamento confirmado."
+            case .check:
+                let receipt: MvpCheckReceipt = try await service.send(intent, generation: generation, canSend: canSend)
+                guard receipt.accountId == intent.accountID else { throw APIError.invalidResponse }
+                transaction = nil
+                check = receipt
+                confirmation = "Conferência confirmada. Você já pode registrar um lançamento."
             }
 
             try await finish(intent, generation: generation)
             confirmedID = transaction?.id
-            message = transaction == nil ? "Conta confirmada." : "Lançamento confirmado."
+            checkReceipt = check
+            message = confirmation
             selectedAccountID = nil
             _ = await read(generation: generation)
             return transaction
@@ -271,7 +359,11 @@ final class MvpAccountViewModel {
             do {
                 try await finish(intent, generation: generation)
                 _ = await read(generation: generation)
-                message = "O envio foi recusado. Confira a conta, a data e os dados antes de tentar novamente."
+                if intent.operation == .check {
+                    message = "A conferência não foi confirmada. Revise novamente o valor, a data e a hora."
+                } else {
+                    message = "O envio foi recusado. Confira a conta, a data e os dados antes de tentar novamente."
+                }
             } catch is CancellationError {
                 return nil
             } catch {
@@ -291,6 +383,7 @@ final class MvpAccountViewModel {
         try await checkSession(generation)
         pending = nil
         preview = nil
+        checkPreview = nil
     }
 
     private func identify(_ summary: MvpAccountSummary, generation: Int) async throws {

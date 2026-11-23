@@ -115,6 +115,24 @@ nonisolated struct MvpAccountService: Sendable {
         )
     }
 
+    func previewCheck(_ input: MvpCheckInput, generation: Int) async throws -> MvpCheckPreview {
+        try await apiClient.post(
+            path: "/mvp/check-previews", body: input, headers: [:],
+            expectedStatusCode: 200, expectedGeneration: generation
+        )
+    }
+
+    func checks(accountID: UUID, pendingOnly: Bool, after: UUID?, revision: String?, generation: Int) async throws -> MvpChecksPage {
+        var query = [URLQueryItem(name: "view", value: pendingOnly ? "pending" : "all")]
+        if let after, let revision {
+            query.append(URLQueryItem(name: "after", value: after.uuidString))
+            query.append(URLQueryItem(name: "revision", value: revision))
+        }
+        return try await apiClient.get(
+            path: "/mvp/account/\(accountID.uuidString)/checks", expectedGeneration: generation, queryItems: query
+        )
+    }
+
     func send<Response: Decodable & Sendable>(
         _ intent: MvpIntent, generation: Int, canSend: @escaping @MainActor @Sendable () -> Bool
     ) async throws -> Response {

@@ -42,6 +42,68 @@ struct MvpRecoveryTests {
         #expect((fields["accountId"] as? String).flatMap(UUID.init(uuidString:)) == RecoveryFixture.accountID)
     }
 
+    @Test(arguments: [false, true])
+    func replaysTheOriginalCheckOnlyForItsPrincipal(expireSession: Bool) async throws {
+        let fixture = RecoveryFixture()
+        defer { fixture.cleanUp() }
+        fixture.install(
+            firstFailure: expireSession ? nil : .timedOut, expireFirstSession: expireSession, checkingBalance: true
+        )
+        let a = try await fixture.model(token: "a")
+        await a.load()
+        await a.reviewCheck(amount: "800,00", reference: Date(timeIntervalSince1970: 1_795_428_000))
+        #expect(a.checkPreview?.differenceMinor == "10000")
+        await a.confirmCheck()
+        #expect(a.hasPendingCheck)
+        #expect(a.checkReceipt == nil)
+        #expect(!a.canWrite)
+
+        let b = try await fixture.model(token: "b")
+        await b.load(recover: true)
+        #expect(!b.hasPendingCheck)
+        #expect(b.checkReceipt == nil)
+        #expect(fixture.posts.withLock { $0.count } == 1)
+
+        let reopened = try await fixture.model(token: "a")
+        await reopened.load(recover: true)
+        #expect(!reopened.hasPendingCheck)
+        #expect(reopened.checkReceipt?.originalDifferenceMinor == "10000")
+        #expect(reopened.entries.isEmpty)
+        let posts = fixture.posts.withLock { $0 }
+        try #require(posts.count == 2)
+        #expect(posts[0].httpBody == posts[1].httpBody)
+        #expect(posts[0].value(forHTTPHeaderField: "Idempotency-Key") == posts[1].value(forHTTPHeaderField: "Idempotency-Key"))
+        #expect(posts.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer a" })
+        let body = try #require(posts[0].httpBody)
+        let fields = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(fields["expectedRevision"] as? String == "1")
+        #expect(fields["observedMinor"] as? String == "80000")
+        #expect(fields["referenceAt"] as? String == "2026-11-22T12:00:00.123456Z")
+    }
+
+    @Test
+    func checkPreviewIsReplacedAfterStaleConfirmation() async throws {
+        let fixture = RecoveryFixture()
+        defer { fixture.cleanUp() }
+        fixture.install(checkingBalance: true, rejectFirstCheck: true)
+        let model = try await fixture.model(token: "a")
+        await model.load()
+        let reference = Date(timeIntervalSince1970: 1_795_428_000)
+        await model.reviewCheck(amount: "800,00", reference: reference)
+        await model.confirmCheck()
+        #expect(model.checkPreview == nil)
+        #expect(model.checkReceipt == nil)
+        #expect(!model.hasPendingCheck)
+        #expect(model.canWrite)
+        #expect(model.message?.contains("Revise novamente") == true)
+        await model.reviewCheck(amount: "800,00", reference: reference)
+        await model.confirmCheck()
+        let posts = fixture.posts.withLock { $0 }
+        try #require(posts.count == 2)
+        #expect(posts[0].value(forHTTPHeaderField: "Idempotency-Key") != posts[1].value(forHTTPHeaderField: "Idempotency-Key"))
+        #expect(model.checkReceipt?.originalDifferenceMinor == "10000")
+    }
+
     @Test
     func protectedWriteFailureDoesNotStartNetwork() async throws {
         let fixture = RecoveryFixture()
@@ -133,25 +195,39 @@ private nonisolated final class RecoveryFixture: Sendable {
     let posts = Mutex<[URLRequest]>([])
     let completed = Mutex(false)
 
-    func install(firstFailure: URLError.Code? = nil, expireFirstSession: Bool = false) {
+    func install(
+        firstFailure: URLError.Code? = nil, expireFirstSession: Bool = false,
+        checkingBalance: Bool = false, rejectFirstCheck: Bool = false
+    ) {
+        let writePath = checkingBalance ? "/mvp/checks" : "/mvp/transactions"
         URLProtocolStub.install(for: baseURL) { request in
             let url = try #require(request.url)
-            if url.path == "/mvp/transactions" {
+            if url.path == writePath {
                 let count = self.posts.withLock { $0.append(request); return $0.count }
                 if count == 1 {
                     if let firstFailure { return .failure(URLError(firstFailure)) }
                     if expireFirstSession { return try self.response(url, status: 401, json: "{}") }
+                    if rejectFirstCheck {
+                        return try self.response(url, status: 409, json: #"{"code":"STALE_REVISION"}"#)
+                    }
                 }
                 self.completed.withLock { $0 = true }
-                return try self.response(url, status: 201, json: Self.receipt)
+                return try self.response(url, status: 201, json: checkingBalance ? Self.checkReceipt : Self.receipt)
+            }
+            if url.path == "/mvp/check-previews" {
+                let revision = rejectFirstCheck && self.posts.withLock({ !$0.isEmpty }) ? "2" : "1"
+                return try self.response(url, status: 200, json: """
+                    {"accountId":"\(Self.accountID)","observedMinor":"80000","revision":"\(revision)",
+                    "referenceAt":"2026-11-22T12:00:00.123456Z","calculatedMinor":"90000","differenceMinor":"10000"}
+                    """)
             }
             if url.path == "/auth/refresh" { return try self.response(url, status: 401, json: "{}") }
 
             let isA = request.value(forHTTPHeaderField: "Authorization") == "Bearer a"
             let confirmed = self.completed.withLock { $0 }
-            let summary = Self.summary(isA: isA, confirmed: confirmed)
+            let summary = Self.summary(isA: isA, confirmed: confirmed, checkingBalance: checkingBalance)
             if url.path.hasSuffix("/history") {
-                let entries = confirmed ? "[\(Self.historyEntry)]" : "[]"
+                let entries = confirmed && !checkingBalance ? "[\(Self.historyEntry)]" : "[]"
                 return try self.response(url, status: 200, json: """
                     {"summary":\(summary),"entries":\(entries),"nextCursor":null}
                     """)
@@ -192,14 +268,14 @@ private nonisolated final class RecoveryFixture: Sendable {
                   Data(json.utf8))
     }
 
-    private static func summary(isA: Bool, confirmed: Bool) -> String {
+    private static func summary(isA: Bool, confirmed: Bool, checkingBalance: Bool) -> String {
         let asOf = "2026-11-23T12:00:00.000000Z"
         if isA {
             return """
             {"principalId":"\(principalA)","account":{"id":"\(accountID)","name":"Fictícia"},
             "legacyAccounts":[],"status":"available","base":{"baseMinor":"90000",
             "coverageStart":"2026-11-01T12:00:00.000000Z","referenceZone":"UTC"},
-            "balanceMinor":"\(confirmed ? "84500" : "90000")","revision":"\(confirmed ? "2" : "1")","asOf":"\(asOf)"}
+            "balanceMinor":"\(confirmed && !checkingBalance ? "84500" : "90000")","revision":"\(confirmed ? "2" : "1")","asOf":"\(asOf)"}
             """
         }
         return """
@@ -208,6 +284,10 @@ private nonisolated final class RecoveryFixture: Sendable {
         """
     }
 
+    private static let checkReceipt = """
+        {"id":"\(transactionID)","accountId":"\(accountID)","observedMinor":"80000",
+        "referenceAt":"2026-11-22T12:00:00.123456Z","originalCalculatedMinor":"90000","originalDifferenceMinor":"10000"}
+        """
     private static let receipt = """
         {"id":"\(transactionID)","accountId":"\(accountID)","type":"expense","amountMinor":"5500","currency":"BRL",
         "occurredAt":"2026-11-22T12:00:00.000000Z","createdAt":"2026-11-23T12:00:00.000000Z"}

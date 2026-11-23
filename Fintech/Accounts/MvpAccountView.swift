@@ -6,6 +6,7 @@ struct MvpAccountView: View {
     @State private var amount = ""
     @State private var start = Date.now
     @State private var isOpening = false
+    @State private var checkBase: MvpAccountSummary.Base?
     @FocusState private var amountFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -63,6 +64,12 @@ struct MvpAccountView: View {
             }
             .refreshable { await viewModel.load(recover: true, keepSelection: true) }
             .sheet(isPresented: Binding(
+                get: { checkBase != nil },
+                set: { if !$0 { checkBase = nil } }
+            )) {
+                if let checkBase { MvpCheckView(model: viewModel, base: checkBase) }
+            }
+            .sheet(isPresented: Binding(
                 get: { viewModel.transactionForm != nil },
                 set: { if !$0 { viewModel.transactionForm = nil } }
             )) {
@@ -78,7 +85,7 @@ struct MvpAccountView: View {
             }
         }
         .task(id: scenePhase) {
-            guard scenePhase == .active, viewModel.transactionForm == nil else { return }
+            guard scenePhase == .active, viewModel.transactionForm == nil, checkBase == nil else { return }
             await viewModel.load(recover: true, keepSelection: true)
         }
         .onChange(of: viewModel.message) { _, message in
@@ -127,15 +134,41 @@ struct MvpAccountView: View {
                 }
                 Text("Consultado em \(dateLabel(summary.asOf, in: zone))")
             }
+            if let check = viewModel.checkReceipt, let base = summary.base {
+                Section("Conferência confirmada") {
+                    MvpCheckValues(
+                        reference: check.referenceAt, zone: TimeZone(identifier: base.referenceZone) ?? zone,
+                        observed: check.observedMinor, calculated: check.originalCalculatedMinor,
+                        difference: check.originalDifferenceMinor
+                    )
+                    Button("Registrar lançamento") { viewModel.startTransaction() }
+                        .disabled(!viewModel.canWrite)
+                }
+            }
+            Section {
+                if viewModel.checkReceipt == nil {
+                    Button("Registrar lançamento") { viewModel.startTransaction() }
+                        .disabled(!viewModel.canWrite)
+                }
+                if let base = summary.base {
+                    Button("Conferir saldo") {
+                        viewModel.editCheck()
+                        checkBase = base
+                    }
+                    .disabled(!viewModel.canWrite)
+                }
+                if let accountID = summary.account?.id {
+                    NavigationLink("Conferências e pendências") {
+                        MvpChecksView(model: viewModel, accountID: accountID)
+                    }
+                    .accessibilityIdentifier("mvp.checks.open")
+                }
+            }
             if let base = summary.base {
                 Section("Base confirmada") {
                     LabeledContent("Saldo inicial", value: MvpAccountViewModel.money(base.baseMinor))
                     LabeledContent("Início da cobertura", value: coverageLabel(base.coverageStart, in: base.referenceZone))
                 }
-            }
-            Section {
-                Button("Registrar lançamento") { viewModel.startTransaction() }
-                    .disabled(!viewModel.canWrite)
             }
         }
     }
@@ -146,7 +179,7 @@ struct MvpAccountView: View {
 
     @ViewBuilder
     private var submissionStatus: some View {
-        let isPending = viewModel.hasPendingOpening || viewModel.hasPendingTransaction
+        let isPending = viewModel.hasPendingOpening || viewModel.hasPendingTransaction || viewModel.hasPendingCheck
         if isPending || viewModel.message != nil || viewModel.confirmedID != nil {
             Section("Envio") {
                 if isPending {
