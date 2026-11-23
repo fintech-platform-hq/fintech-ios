@@ -34,16 +34,19 @@ struct MvpAccountTests {
         defer { URLProtocolStub.reset(for: baseURL) }
 
         let (session, service) = makeService(baseURL)
-        let model = MvpAccountViewModel(service: service, session: session)
+        let root = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = MvpAccountViewModel(service: service, session: session, store: MvpIntentStore(root: root))
         await model.load()
         await model.review(amount: "-55,00", start: Date(timeIntervalSince1970: 1_793_534_400), zone: .gmt)
         #expect(model.preview?.baseMinor == "-5500")
 
         await model.confirm()
         #expect(model.hasPendingOpening)
-        await model.confirm()
-        #expect(!model.hasPendingOpening)
-        guard case let .loaded(summary) = model.state else {
+        let reopened = MvpAccountViewModel(service: service, session: session, store: MvpIntentStore(root: root))
+        await reopened.load(recover: true)
+        #expect(!reopened.hasPendingOpening)
+        guard case let .loaded(summary) = reopened.state else {
             Issue.record("Expected the canonical account read.")
             return
         }
@@ -80,8 +83,8 @@ struct MvpAccountTests {
         let (session, service) = makeService(baseURL)
         let model = MvpAccountViewModel(service: service, session: session)
         await model.load()
-        guard case .failed = model.state else {
-            Issue.record("Expected a failed account read.")
+        guard case .unavailable = model.state else {
+            Issue.record("Expected an unavailable account read.")
             return
         }
         await model.load()

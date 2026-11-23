@@ -4,13 +4,22 @@ import UIKit
 struct CreateTransactionView: View {
     let viewModel: CreateTransactionViewModel
     let onSignOut: () -> Void
+    let occurrenceRange: ClosedRange<Date>?
+    let occurrenceZone: TimeZone?
+    let onClose: (() -> Void)?
 
     init(
         viewModel: CreateTransactionViewModel,
-        onSignOut: @escaping () -> Void = {}
+        onSignOut: @escaping () -> Void = {},
+        occurrenceRange: ClosedRange<Date>? = nil,
+        occurrenceZone: TimeZone? = nil,
+        onClose: (() -> Void)? = nil
     ) {
         self.viewModel = viewModel
         self.onSignOut = onSignOut
+        self.occurrenceRange = occurrenceRange
+        self.occurrenceZone = occurrenceZone
+        self.onClose = onClose
     }
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -82,6 +91,19 @@ struct CreateTransactionView: View {
                         replaceAmountDigits: viewModel.replaceAmountDigits,
                         isDisabled: isFormDisabled
                     )
+                    if let occurrenceRange {
+                        DatePicker(
+                            "Data e hora do lançamento",
+                            selection: Binding(
+                                get: { viewModel.occurrence ?? occurrenceRange.upperBound },
+                                set: { viewModel.occurrence = $0 }
+                            ),
+                            in: occurrenceRange
+                        )
+                        .environment(\.timeZone, occurrenceZone ?? .current)
+                        .environment(\.locale, Locale(identifier: "pt_BR"))
+                        .disabled(isFormDisabled)
+                    }
                 }
 
                 if let transactionFeedback {
@@ -104,7 +126,11 @@ struct CreateTransactionView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Sign Out", action: onSignOut)
+                    if let onClose {
+                        Button("Fechar", action: onClose).disabled(isFormDisabled)
+                    } else {
+                        Button("Sign Out", action: onSignOut)
+                    }
                 }
             }
             .scrollDismissesKeyboard(.interactively)
@@ -123,6 +149,7 @@ struct CreateTransactionView: View {
             .onChange(of: viewModel.state) { _, state in
                 announceStatus(for: state)
             }
+            .interactiveDismissDisabled(viewModel.state.isBusy)
         }
     }
 
