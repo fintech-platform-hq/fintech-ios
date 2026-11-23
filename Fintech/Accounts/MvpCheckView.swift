@@ -102,22 +102,34 @@ struct MvpCheckValues: View {
 
 struct MvpCheckAmount: View {
     let title: String
-    let minor: String
+    let minor: String?
     let showSign: Bool
 
-    init(_ title: String, minor: String, showSign: Bool = false) {
+    init(_ title: String, minor: String?, showSign: Bool = false) {
         self.title = title
         self.minor = minor
         self.showSign = showSign
     }
 
     var body: some View {
+        if let minor {
+            amount(minor)
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text("Indisponível")
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func amount(_ minor: String) -> some View {
         let negative = minor.hasPrefix("-")
         let magnitude = MvpAccountViewModel.money(negative ? String(minor.dropFirst()) : minor)
         let positive = showSign && minor != "0" && !negative
         let sign = negative ? "−" : positive ? "+" : ""
         let spokenSign = negative ? "menos " : positive ? "mais " : ""
-        VStack(alignment: .leading, spacing: 2) {
+        return VStack(alignment: .leading, spacing: 2) {
             Text(title)
             Text(sign + magnitude).monospacedDigit()
         }

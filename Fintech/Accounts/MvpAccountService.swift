@@ -24,6 +24,7 @@ nonisolated struct MvpAccountSummary: Decodable, Sendable {
     let status: Status
     let base: Base?
     let balanceMinor: String?
+    let baseSuspended: Bool?
     let revision: String?
     let asOf: Date
 }
@@ -145,6 +146,11 @@ nonisolated struct MvpAccountService: Sendable {
     func previewAudit(_ input: MvpAuditInput, generation: Int) async throws -> MvpAuditPreview {
         try await apiClient.post(path: "/mvp/audit-previews", body: input, headers: [:],
                                  expectedStatusCode: 200, expectedGeneration: generation)
+    }
+
+    func baseVersions(accountID: UUID, generation: Int) async throws -> [MvpBaseVersion] {
+        try await apiClient.get(path: "/mvp/account/\(accountID.uuidString)/base-versions",
+                                expectedGeneration: generation)
     }
 
     func movementVersions(accountID: UUID, movementID: UUID, generation: Int) async throws -> [MvpMovementVersion] {

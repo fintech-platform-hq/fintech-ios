@@ -37,6 +37,11 @@ final class MvpAccountViewModel {
     var hasPendingTransaction: Bool { pending?.operation == .transaction }
     var hasPendingRecovery: Bool { pending?.operation == .recovery }
     var hasPendingAudit: Bool { pending?.operation == .audit }
+    var hasPendingBaseChange: Bool {
+        guard let pending, pending.operation == .audit,
+              let input = try? JSONDecoder().decode(MvpAuditInput.self, from: pending.body) else { return false }
+        return input.action.concernsBase
+    }
     var hasPendingCheck: Bool { pending?.operation == .check }
     var canWrite: Bool { storageReady && pending == nil && !busy }
 
@@ -268,6 +273,16 @@ final class MvpAccountViewModel {
         return preview
     }
 
+    func loadBaseVersions(accountID: UUID) async throws -> [MvpBaseVersion] {
+        guard let generation else { throw CancellationError() }
+        let versions = try await service.baseVersions(accountID: accountID, generation: generation)
+        try await checkSession(generation)
+        guard versions.allSatisfy({ $0.accountId == accountID && $0.authorId == principalID }) else {
+            throw APIError.invalidResponse
+        }
+        return versions
+    }
+
     func loadMovementVersions(accountID: UUID, movementID: UUID) async throws -> [MvpMovementVersion] {
         guard let generation else { throw CancellationError() }
         let versions = try await service.movementVersions(accountID: accountID, movementID: movementID, generation: generation)
@@ -276,7 +291,8 @@ final class MvpAccountViewModel {
     }
 
     func confirmAudit(_ confirmation: MvpAuditConfirmation) async -> Bool {
-        guard canWrite, let generation, let principalID else { return false }
+        guard canWrite, confirmation.preview.previewToken != nil,
+              let generation, let principalID else { return false }
         busy = true
         auditReceipt = nil
         defer { busy = false }
@@ -394,7 +410,8 @@ final class MvpAccountViewModel {
 
             if intent.operation != .opening {
                 guard let target = intent.accountID, case let .loaded(summary) = state,
-                      summary.status == .available, summary.account?.id == target else {
+                      summary.status == .available || summary.baseSuspended == true,
+                      summary.account?.id == target else {
                     message = "O envio pendente aguarda a consulta da conta vinculada."
                     return nil
                 }
@@ -497,6 +514,7 @@ final class MvpAccountViewModel {
         switch failure {
         case .badRequest, .http(statusCode: 404, message: _),
                 .mvpConflict(code: "STALE_REVISION"), .mvpConflict(code: "BASE_REQUIRED"),
+                .mvpConflict(code: "BASE_SUSPENDED"),
                 .mvpConflict(code: "MVP_ACCOUNT_EXISTS"), .mvpConflict(code: "LEGACY_ADOPTION_BLOCKED"),
                 .mvpConflict(code: "OCCURRENCE_TIME_REQUIRED"),
                 .mvpConflict(code: "AUDIT_PREVIEW_REQUIRED"), .mvpConflict(code: "AUDIT_TARGET_INACTIVE"),
