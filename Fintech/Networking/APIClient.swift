@@ -6,7 +6,6 @@ nonisolated struct APIClient: Sendable {
     private let baseURL: URL
     private let session: URLSession
     private let authenticationSession: AuthenticationSession?
-    var environmentID: String { baseURL.absoluteString }
 
     init(
         baseURL: URL,
@@ -20,13 +19,11 @@ nonisolated struct APIClient: Sendable {
 
     func get<Response>(
         path: String,
-        expectedGeneration: Int,
-        queryItems: [URLQueryItem] = []
+        expectedGeneration: Int
     ) async throws -> Response where Response: Decodable & Sendable {
         let data = try await execute(
             path: path, method: "GET", body: nil, headers: [:],
-            expectedStatusCode: 200, expectedGeneration: expectedGeneration,
-            queryItems: queryItems
+            expectedStatusCode: 200, expectedGeneration: expectedGeneration
         )
         return try decode(data)
     }
@@ -39,33 +36,21 @@ nonisolated struct APIClient: Sendable {
         expectedGeneration: Int? = nil
     ) async throws -> Response
     where Request: Encodable & Sendable, Response: Decodable & Sendable {
-        try await post(
-            path: path, frozenBody: Self.freeze(body), headers: headers,
-            expectedStatusCode: expectedStatusCode, expectedGeneration: expectedGeneration
-        )
-    }
+        let data: Data
 
-    static func freeze(_ body: some Encodable) throws -> Data {
-        do { return try APICoding.makeEncoder().encode(body) }
-        catch { throw APIError.encoding }
-    }
+        do {
+            data = try APICoding.makeEncoder().encode(body)
+        } catch {
+            throw APIError.encoding
+        }
 
-    func post<Response: Decodable & Sendable>(
-        path: String,
-        frozenBody: Data,
-        headers: [String: String],
-        expectedStatusCode: Int,
-        expectedGeneration: Int?,
-        canSend: (@MainActor @Sendable () -> Bool)? = nil
-    ) async throws -> Response {
         let responseData = try await execute(
             path: path,
             method: "POST",
-            body: frozenBody,
+            body: data,
             headers: headers,
             expectedStatusCode: expectedStatusCode,
-            expectedGeneration: expectedGeneration,
-            canSend: canSend
+            expectedGeneration: expectedGeneration
         )
         return try decode(responseData)
     }
@@ -108,18 +93,13 @@ nonisolated struct APIClient: Sendable {
         body: Data?,
         headers: [String: String],
         expectedStatusCode: Int,
-        expectedGeneration: Int? = nil,
-        queryItems: [URLQueryItem] = [],
-        canSend: (@MainActor @Sendable () -> Bool)? = nil
+        expectedGeneration: Int? = nil
     ) async throws -> Data {
         let url = path
             .split(separator: "/", omittingEmptySubsequences: true)
             .reduce(baseURL) { $0.appendingPathComponent(String($1)) }
 
-        var request = URLRequest(url: queryItems.isEmpty ? url : url.appending(queryItems: queryItems))
-        if path.hasPrefix("/mvp/") {
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-        }
+        var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
         if body != nil {
@@ -143,7 +123,6 @@ nonisolated struct APIClient: Sendable {
         }
 
         try await checkGeneration(expectedGeneration)
-        if let canSend, !(await canSend()) { throw CancellationError() }
         let firstResponse = try await send(request)
         try await checkGeneration(expectedGeneration)
         guard firstResponse.response.statusCode == 401,
@@ -153,11 +132,10 @@ nonisolated struct APIClient: Sendable {
                 firstResponse.data,
                 response: firstResponse.response,
                 expectedStatusCode: expectedStatusCode,
-                path: path
+                appleSignIn: path == "/auth/apple"
             )
         }
 
-        if let canSend, !(await canSend()) { throw CancellationError() }
         let refreshedToken: String
         do {
             refreshedToken = try await authenticationSession
@@ -178,7 +156,6 @@ nonisolated struct APIClient: Sendable {
             forHTTPHeaderField: "Authorization"
         )
         try await checkGeneration(expectedGeneration)
-        if let canSend, !(await canSend()) { throw CancellationError() }
         let retryResponse = try await send(retry)
         try await checkGeneration(expectedGeneration)
 
@@ -189,7 +166,7 @@ nonisolated struct APIClient: Sendable {
         return try validatedData(
             retryResponse.data,
             response: retryResponse.response,
-            expectedStatusCode: expectedStatusCode, path: path
+            expectedStatusCode: expectedStatusCode
         )
     }
 
@@ -231,16 +208,16 @@ nonisolated struct APIClient: Sendable {
         _ data: Data,
         response: HTTPURLResponse,
         expectedStatusCode: Int,
-        path: String
+        appleSignIn: Bool = false
     ) throws -> Data {
         guard response.statusCode == expectedStatusCode else {
-            throw mapHTTPError(statusCode: response.statusCode, data: data, path: path)
+            throw mapHTTPError(statusCode: response.statusCode, data: data, appleSignIn: appleSignIn)
         }
 
         return data
     }
 
-    private func mapHTTPError(statusCode: Int, data: Data, path: String) -> APIError {
+    private func mapHTTPError(statusCode: Int, data: Data, appleSignIn: Bool) -> APIError {
         let payload = try? JSONDecoder().decode(APIErrorPayload.self, from: data)
         let messages = payload?.messages ?? []
 
@@ -250,8 +227,7 @@ nonisolated struct APIClient: Sendable {
         case 400:
             return .badRequest(messages: messages)
         case 409:
-            if path == "/auth/apple", payload?.code == "ACCOUNT_LINK_REQUIRED" { return .accountLinkRequired }
-            if path.hasPrefix("/mvp/"), let code = payload?.code { return .mvpConflict(code: code) }
+            if appleSignIn, payload?.code == "ACCOUNT_LINK_REQUIRED" { return .accountLinkRequired }
             return .idempotencyConflict(message: messages.first)
         case 500...599:
             return .server(statusCode: statusCode, message: messages.first)

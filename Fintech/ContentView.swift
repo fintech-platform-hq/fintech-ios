@@ -12,7 +12,6 @@ struct ContentView: View {
     let createTransactionViewModel: CreateTransactionViewModel?
     let mvpAccountService: MvpAccountService?
     let authenticationSession: AuthenticationSession
-    let mvpIntentStore: MvpIntentStore
 
     var body: some View {
         Group {
@@ -22,10 +21,7 @@ struct ContentView: View {
             case .authenticated:
                 Group {
                     if let mvpAccountService {
-                        MvpAccountView(
-                            service: mvpAccountService, session: authenticationSession,
-                            store: mvpIntentStore, onSignOut: signOut
-                        )
+                        MvpAccountView(service: mvpAccountService, session: authenticationSession, onSignOut: signOut)
                     } else if let createTransactionViewModel {
                         CreateTransactionView(viewModel: createTransactionViewModel, onSignOut: signOut)
                     }

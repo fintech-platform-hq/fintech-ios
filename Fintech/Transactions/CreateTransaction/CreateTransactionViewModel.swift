@@ -15,9 +15,6 @@ final class CreateTransactionViewModel {
     }
 
     private(set) var descriptionText: String
-    var occurrence: Date? {
-        didSet { formDidChange() }
-    }
 
     private(set) var state: CreateTransactionViewState
     private(set) var successSnapshot: CreateTransactionSuccessSnapshot?
@@ -44,8 +41,7 @@ final class CreateTransactionViewModel {
         initialState: CreateTransactionViewState = .idle,
         initialSuccessSnapshot: CreateTransactionSuccessSnapshot? = nil,
         makeUUID: @escaping () -> UUID = UUID.init,
-        now: @escaping () -> Date = Date.init,
-        occurrence: Date? = nil
+        now: @escaping () -> Date = Date.init
     ) {
         self.service = service
         self.disposableDemoAccountID = disposableDemoAccountID
@@ -60,7 +56,6 @@ final class CreateTransactionViewModel {
         self.successSnapshot = initialSuccessSnapshot
         self.makeUUID = makeUUID
         self.now = now
-        self.occurrence = occurrence
     }
 
     func updateAmountDigits(_ proposedValue: String) {
@@ -173,8 +168,6 @@ final class CreateTransactionViewModel {
             state = .failure(.submissionCancelled)
         } catch let error as APIError {
             state = .failure(Self.displayError(for: error))
-        } catch let error as CreateTransactionDisplayError {
-            state = .failure(error)
         } catch {
             state = .failure(
                 .unexpected(message: "The transaction could not be submitted.")
@@ -195,7 +188,7 @@ final class CreateTransactionViewModel {
             description: Self.normalizedDescriptionForSubmit(
                 from: descriptionText
             ),
-            occurredAt: occurrence ?? now(),
+            occurredAt: now(),
             clientMutationId: clientMutationID
         )
 
