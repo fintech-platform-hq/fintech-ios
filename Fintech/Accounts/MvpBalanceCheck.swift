@@ -34,8 +34,28 @@ nonisolated struct MvpCheckReceipt: Decodable, Sendable {
     let accountId: UUID
     let observedMinor: String
     let referenceAt: Date
+    let referenceInstant: String
+    let authorId: UUID?
+    let createdAt: Date?
     let originalCalculatedMinor: String
     let originalDifferenceMinor: String
+
+    init(from decoder: any Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        id = try fields.decode(UUID.self, forKey: .id)
+        accountId = try fields.decode(UUID.self, forKey: .accountId)
+        observedMinor = try fields.decode(String.self, forKey: .observedMinor)
+        referenceAt = try fields.decode(Date.self, forKey: .referenceAt)
+        referenceInstant = try fields.decode(String.self, forKey: .referenceAt)
+        authorId = try fields.decodeIfPresent(UUID.self, forKey: .authorId)
+        createdAt = try fields.decodeIfPresent(Date.self, forKey: .createdAt)
+        originalCalculatedMinor = try fields.decode(String.self, forKey: .originalCalculatedMinor)
+        originalDifferenceMinor = try fields.decode(String.self, forKey: .originalDifferenceMinor)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, accountId, observedMinor, referenceAt, authorId, createdAt, originalCalculatedMinor, originalDifferenceMinor
+    }
 }
 
 nonisolated struct MvpCheckEntry: Decodable, Identifiable, Sendable {
@@ -58,10 +78,13 @@ nonisolated struct MvpCheckEntry: Decodable, Identifiable, Sendable {
     let calculatedAtReferenceMinor: String
     let remainingDifferenceMinor: String
     let status: Status
+    let supersededBy: UUID?
+    let replacesCheckId: UUID?
+    let replacementReason: String?
     var id: UUID { receipt.id }
     var canRecover: Bool {
-        status == .open || status == .partiallyExplained
-            || (status == .coincident && receipt.originalDifferenceMinor != "0")
+        supersededBy == nil && (status == .open || status == .partiallyExplained
+            || (status == .coincident && receipt.originalDifferenceMinor != "0"))
     }
 
     init(from decoder: any Decoder) throws {
@@ -69,12 +92,16 @@ nonisolated struct MvpCheckEntry: Decodable, Identifiable, Sendable {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
         calculatedAtReferenceMinor = try fields.decode(String.self, forKey: .calculatedAtReferenceMinor)
         remainingDifferenceMinor = try fields.decode(String.self, forKey: .remainingDifferenceMinor)
+        supersededBy = try fields.decodeIfPresent(UUID.self, forKey: .supersededBy)
+        replacesCheckId = try fields.decodeIfPresent(UUID.self, forKey: .replacesCheckId)
+        replacementReason = try fields.decodeIfPresent(String.self, forKey: .replacementReason)
         status = try fields.decodeIfPresent(Status.self, forKey: .resolutionStatus)
             ?? fields.decode(Status.self, forKey: .status)
     }
 
     private enum CodingKeys: String, CodingKey {
         case calculatedAtReferenceMinor, remainingDifferenceMinor, status, resolutionStatus
+        case supersededBy, replacesCheckId, replacementReason
     }
 }
 
