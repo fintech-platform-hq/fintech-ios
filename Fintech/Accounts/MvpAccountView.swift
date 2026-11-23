@@ -43,6 +43,9 @@ struct MvpAccountView: View {
                     }
                 case let .loaded(summary):
                     accountContent(summary)
+                    if let base = summary.base, let accountID = summary.account?.id {
+                        baseTools(base, accountID: accountID, suspended: summary.baseSuspended == true)
+                    }
                 }
 
                 submissionStatus
@@ -123,11 +126,16 @@ struct MvpAccountView: View {
             }
         case .unavailable:
             Section("Saldo") {
-                Text("Saldo indisponível para este horário.")
+                Text(summary.baseSuspended == true
+                     ? "Saldo e recálculos suspensos até a revisão da base."
+                     : "Saldo indisponível para este horário.")
+                    .accessibilityIdentifier("mvp.base.suspended")
             }
         case .available:
             Section("Saldo atual") {
-                if let balance = summary.balanceMinor {
+                if viewModel.hasPendingBaseChange {
+                    Text("Saldo indisponível enquanto o envio aguarda confirmação.")
+                } else if let balance = summary.balanceMinor {
                     Text(MvpAccountViewModel.money(balance))
                         .font(.title2.monospacedDigit())
                         .accessibilityIdentifier("mvp.account.balance")
@@ -164,13 +172,43 @@ struct MvpAccountView: View {
                     .accessibilityIdentifier("mvp.checks.open")
                 }
             }
-            if let base = summary.base {
-                Section("Base confirmada") {
-                    LabeledContent("Saldo inicial", value: MvpAccountViewModel.money(base.baseMinor))
-                    LabeledContent("Início da cobertura", value: coverageLabel(base.coverageStart, in: base.referenceZone))
+        }
+    }
+
+    private func baseTools(_ base: MvpAccountSummary.Base, accountID: UUID, suspended: Bool) -> some View {
+        let referenceZone = TimeZone(identifier: base.referenceZone) ?? zone
+        return Section(suspended ? "Base em revisão" : "Base confirmada") {
+            if !suspended && !viewModel.hasPendingBaseChange {
+                LabeledContent("Saldo inicial", value: MvpAccountViewModel.money(base.baseMinor))
+                LabeledContent("Início da cobertura", value: coverageLabel(base.coverageStart, in: base.referenceZone))
+            }
+            if suspended {
+                NavigationLink("Conferências e pendências") {
+                    MvpChecksView(model: viewModel, accountID: accountID)
                 }
+                .accessibilityIdentifier("mvp.checks.open")
+            }
+            NavigationLink("Histórico da base") {
+                MvpBaseVersionsView(model: viewModel, accountID: accountID)
+            }
+            .accessibilityIdentifier("mvp.base.versions")
+            baseAction(.correctBase, accountID: accountID, base: base, zone: referenceZone)
+            if !suspended {
+                baseAction(.suspendBase, accountID: accountID, base: base, zone: referenceZone)
             }
         }
+    }
+
+    private func baseAction(_ action: MvpAuditInput.Action, accountID: UUID,
+                            base: MvpAccountSummary.Base, zone: TimeZone) -> some View {
+        NavigationLink {
+            MvpAuditView(model: viewModel, accountID: accountID, action: action, base: base,
+                         coverageStart: base.coverageStart, zone: zone)
+        } label: {
+            Text(action.title)
+        }
+        .accessibilityIdentifier("mvp.audit.open.\(action.rawValue)")
+        .disabled(!viewModel.canWrite)
     }
 
     private var reloadButton: some View {

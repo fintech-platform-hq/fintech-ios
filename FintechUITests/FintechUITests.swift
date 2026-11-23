@@ -163,9 +163,7 @@ final class FintechUITests: XCTestCase {
 
         submitButton.tap()
 
-        let status = app.descendants(matching: .any)[
-            "createTransaction.status"
-        ]
+        let status = app.staticTexts["createTransaction.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 2))
         XCTAssertEqual(status.label, "Enter an amount.")
     }

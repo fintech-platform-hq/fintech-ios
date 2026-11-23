@@ -60,11 +60,12 @@ nonisolated struct MvpCheckReceipt: Decodable, Sendable {
 
 nonisolated struct MvpCheckEntry: Decodable, Identifiable, Sendable {
     enum Status: String, Decodable, Sendable {
-        case open, coincident, resolved
+        case open, coincident, resolved, unavailable
         case partiallyExplained = "partially_explained"
 
         var title: String {
             switch self {
+            case .unavailable: "Recálculo indisponível"
             case .open: "Divergência em aberto"
             case .coincident: "Valores coincidentes no corte"
             case .partiallyExplained: "Divergência parcialmente explicada"
@@ -75,8 +76,8 @@ nonisolated struct MvpCheckEntry: Decodable, Identifiable, Sendable {
     }
 
     let receipt: MvpCheckReceipt
-    let calculatedAtReferenceMinor: String
-    let remainingDifferenceMinor: String
+    let calculatedAtReferenceMinor: String?
+    let remainingDifferenceMinor: String?
     let status: Status
     let supersededBy: UUID?
     let replacesCheckId: UUID?
@@ -90,8 +91,8 @@ nonisolated struct MvpCheckEntry: Decodable, Identifiable, Sendable {
     init(from decoder: any Decoder) throws {
         receipt = try MvpCheckReceipt(from: decoder)
         let fields = try decoder.container(keyedBy: CodingKeys.self)
-        calculatedAtReferenceMinor = try fields.decode(String.self, forKey: .calculatedAtReferenceMinor)
-        remainingDifferenceMinor = try fields.decode(String.self, forKey: .remainingDifferenceMinor)
+        calculatedAtReferenceMinor = try fields.decodeIfPresent(String.self, forKey: .calculatedAtReferenceMinor)
+        remainingDifferenceMinor = try fields.decodeIfPresent(String.self, forKey: .remainingDifferenceMinor)
         supersededBy = try fields.decodeIfPresent(UUID.self, forKey: .supersededBy)
         replacesCheckId = try fields.decodeIfPresent(UUID.self, forKey: .replacesCheckId)
         replacementReason = try fields.decodeIfPresent(String.self, forKey: .replacementReason)

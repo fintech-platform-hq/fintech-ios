@@ -20,20 +20,20 @@ struct MvpChecksView: View {
             .pickerStyle(.inline)
             .accessibilityIdentifier("mvp.check.filter")
 
-            if let summary, let balance = summary.balanceMinor {
+            if let summary {
                 Section {
-                    MvpCheckAmount("Saldo calculado atual", minor: balance)
+                    MvpCheckAmount("Saldo calculado atual", minor: model.hasPendingBaseChange ? nil : summary.balanceMinor)
                         .accessibilityIdentifier("mvp.check.currentBalance")
                 }
                 let zone = summary.base.flatMap { TimeZone(identifier: $0.referenceZone) } ?? .current
                 ForEach(entries) { entry in
-                    Section(entry.supersededBy == nil ? entry.status.title : "Conferência substituída") {
+                    Section(title(for: entry)) {
                         MvpCheckValues(
                             reference: entry.receipt.referenceAt, zone: zone, observed: entry.receipt.observedMinor,
                             calculated: entry.receipt.originalCalculatedMinor, difference: entry.receipt.originalDifferenceMinor
                         )
-                        MvpCheckAmount("Saldo recalculado no corte", minor: entry.calculatedAtReferenceMinor)
-                        MvpCheckAmount("Divergência restante no corte", minor: entry.remainingDifferenceMinor, showSign: true)
+                        MvpCheckAmount("Saldo recalculado no corte", minor: model.hasPendingBaseChange ? nil : entry.calculatedAtReferenceMinor)
+                        MvpCheckAmount("Divergência restante no corte", minor: model.hasPendingBaseChange ? nil : entry.remainingDifferenceMinor, showSign: true)
                             .accessibilityIdentifier("mvp.check.remainingDifference")
                         if let reason = entry.replacementReason {
                             Text("Motivo da substituição: \(reason)")
@@ -46,7 +46,7 @@ struct MvpChecksView: View {
                                     .environment(\.timeZone, zone)
                             }
                         }
-                        if entry.supersededBy == nil, let base = summary.base {
+                        if entry.supersededBy == nil, summary.status == .available, let base = summary.base {
                             NavigationLink {
                                 MvpAuditView(model: model, accountID: accountID, action: .replaceCheck, check: entry,
                                              coverageStart: base.coverageStart, zone: zone)
@@ -66,7 +66,11 @@ struct MvpChecksView: View {
                     }
                 }
                 if entries.isEmpty && !loading && error == nil {
-                    Text(pendingOnly ? "Nenhuma divergência em aberto." : "Nenhuma conferência registrada.")
+                    if pendingOnly && (summary.baseSuspended == true || model.hasPendingBaseChange) {
+                        Text("Pendências indisponíveis. Consulte os resultados originais em Todas as conferências.")
+                    } else {
+                        Text(pendingOnly ? "Nenhuma divergência em aberto." : "Nenhuma conferência registrada.")
+                    }
                 }
                 if let nextAfter, !loading {
                     Button("Carregar mais conferências") {
@@ -87,6 +91,12 @@ struct MvpChecksView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task(id: "\(pendingOnly)-\(model.recoveryReceipt?.id.uuidString ?? "")-\(model.auditReceipt?.id.uuidString ?? "")") { await load(pending: pendingOnly) }
         .refreshable { await load(pending: pendingOnly) }
+    }
+
+    private func title(for entry: MvpCheckEntry) -> String {
+        if entry.supersededBy != nil { return "Conferência substituída" }
+        if model.hasPendingBaseChange { return "Recálculo indisponível" }
+        return entry.status.title
     }
 
     private func load(pending: Bool, after: UUID? = nil) async {

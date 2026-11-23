@@ -316,6 +316,243 @@ final class MvpAccountIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testI5SuspendsAndRecoversBaseCorrectionAcrossSessionsOverHTTPS() async throws {
+        guard ProcessInfo.processInfo.environment["FINTECH_I5_HTTPS_TEST"] == "1" else {
+            throw XCTSkip("Requires the disposable I5 HTTPS fixture.")
+        }
+        continueAfterFailure = false
+        let app = launchI5()
+        if app.buttons["Sair"].waitForExistence(timeout: 2) { tap(app.buttons["Sair"]) }
+        signIn(app, email: "i5-a@example.test", password: "fictional i5 password")
+        let balance = app.staticTexts["mvp.account.balance"]
+        waitForLabel(balance, "R$ 827,00")
+        let standardHeight = balance.frame.height
+
+        openBaseAction(app, "suspend_base")
+        typeAudit(app, amount: nil, reason: "Base em verificacao I5")
+        let confirm = app.buttons["mvp.audit.confirm"]
+        show(app, confirm)
+        tap(confirm)
+        let suspended = app.staticTexts["mvp.base.suspended"]
+        show(app, suspended)
+        XCTAssertFalse(balance.exists)
+        openChecks(app)
+        let original = app.descendants(matching: .any)["mvp.check.originalDifference"]
+        show(app, original)
+        XCTAssertEqual(original.value as? String, "mais R$ 45,00")
+        XCTAssertTrue(app.staticTexts["Recálculo indisponível"].exists)
+        attachScreen(app, named: "I5: cifras suspensas e conferência original preservada")
+        tap(app.navigationBars.firstMatch.buttons.firstMatch)
+
+        openBaseAction(app, "correct_base")
+        typeAudit(app, amount: "910,00", reason: "Base conferida I5")
+        let projected = app.descendants(matching: .any)["mvp.audit.projectedBalance"]
+        show(app, projected)
+        XCTAssertEqual(projected.value as? String, "R$ 837,00")
+        let difference = app.descendants(matching: .any)["mvp.audit.projectedDifference"]
+        show(app, difference)
+        XCTAssertEqual(difference.value as? String, "mais R$ 55,00")
+        show(app, confirm)
+        tap(confirm)
+        try await waitForI5Replay("interrupted")
+        app.terminate()
+
+        app.launch()
+        let pending = app.staticTexts["mvp.intent.pending"]
+        show(app, pending)
+        XCTAssertFalse(balance.exists)
+        tap(app.buttons["Sair"])
+        let attempts = try await i5Status("attempts")
+        signIn(app, email: "i5-b@example.test", password: "fictional i5 password")
+        XCTAssertTrue(app.buttons["Abrir conta pessoal em reais"].waitForExistence(timeout: 10))
+        XCTAssertFalse(pending.exists)
+        XCTAssertFalse(balance.exists)
+        let attemptsAfterSwitch = try await i5Status("attempts")
+        XCTAssertEqual(attemptsAfterSwitch, attempts)
+        tap(app.buttons["Sair"])
+
+        var release = URLRequest(url: i5URL.appending(path: "__i5/release"))
+        release.httpMethod = "POST"
+        let (_, response) = try await URLSession.shared.data(for: release)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 204)
+        app.terminate()
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        signIn(app, email: "i5-a@example.test", password: "fictional i5 password")
+        try await waitForI5Replay("verified")
+        waitForLabel(balance, "R$ 837,00")
+        XCTAssertGreaterThan(balance.frame.height, standardHeight)
+        XCTAssertFalse(pending.exists)
+        openChecks(app)
+        show(app, original)
+        XCTAssertEqual(original.value as? String, "mais R$ 45,00")
+        let residual = app.descendants(matching: .any)["mvp.check.remainingDifference"]
+        show(app, residual)
+        XCTAssertEqual(residual.value as? String, "mais R$ 55,00")
+        try app.performAccessibilityAudit(for: [.dynamicType, .sufficientElementDescription])
+        attachScreen(app, named: "I5 S10: diferença original de R$ 45 e resíduo de R$ 55")
+        tap(app.navigationBars.firstMatch.buttons.firstMatch)
+
+        let versions = app.buttons["mvp.base.versions"]
+        show(app, versions)
+        tap(versions)
+        for action in ["correct_base", "suspend_base", "original"] {
+            let header = app.descendants(matching: .any)
+                .matching(identifier: "mvp.base.version.\(action)").firstMatch
+            show(app, header)
+        }
+        try app.performAccessibilityAudit(for: [.dynamicType, .sufficientElementDescription])
+    }
+
+    @MainActor
+    func testI5VerifiesOpeningRegistrationAndRecoveryOverHTTPS() throws {
+        guard ProcessInfo.processInfo.environment["FINTECH_I5_HTTPS_TEST"] == "1" else {
+            throw XCTSkip("Requires the disposable I5 HTTPS fixture.")
+        }
+        continueAfterFailure = false
+        let app = launchI5()
+        if app.buttons["Sair"].waitForExistence(timeout: 2) { tap(app.buttons["Sair"]) }
+        signIn(app, email: "i5-d@example.test", password: "fictional i5 password")
+        tap(app.buttons["Abrir conta pessoal em reais"])
+        let base = app.textFields["mvp.account.openingAmount"]
+        tap(base)
+        base.typeText("900,00")
+        tap(app.buttons["Revisar abertura"])
+        tap(app.buttons["Confirmar abertura"])
+        let balance = app.staticTexts["mvp.account.balance"]
+        waitForLabel(balance, "R$ 900,00")
+        register(app, amountDigits: "5500", description: "Lancamento ficticio I5")
+        waitForLabel(balance, "R$ 845,00")
+        let check = app.buttons["Conferir saldo"]
+        show(app, check)
+        tap(check)
+        let observed = app.textFields["mvp.check.amount"]
+        tap(observed)
+        observed.typeText("800,00")
+        tap(app.buttons["Revisar conferência"])
+        let confirm = app.buttons["Confirmar conferência"]
+        show(app, confirm)
+        tap(confirm)
+        waitForLabel(balance, "R$ 845,00")
+        tap(app.buttons["Sair"])
+
+        signIn(app, email: "i5-c@example.test", password: "fictional i5 password")
+        waitForLabel(balance, "R$ 827,00")
+        openChecks(app)
+        openRecovery(app)
+        enterRecovery(app, amount: "25,00", time: "08:00:00")
+        typeRecoveryEvidence(app, "Comprovante ficticio I5")
+        confirmDistinctRecovery(app)
+        let residual = app.descendants(matching: .any)["mvp.check.remainingDifference"]
+        show(app, residual)
+        XCTAssertEqual(residual.value as? String, "mais R$ 20,00")
+        attachScreen(app, named: "I5: recuperação retroativa no fluxo existente")
+    }
+
+    @MainActor
+    func testI5ReadsBaseVersionDetailsAtMaximumDynamicType() throws {
+        guard ProcessInfo.processInfo.environment["FINTECH_I5_HISTORY_TEST"] == "1" else {
+            throw XCTSkip("Requires the completed I5 HTTPS fixture.")
+        }
+        continueAfterFailure = false
+        let app = launchI5(maximumDynamicType: true)
+        if app.buttons["Sair"].waitForExistence(timeout: 2) { tap(app.buttons["Sair"]) }
+        signIn(app, email: "i5-a@example.test", password: "fictional i5 password")
+        waitForLabel(app.staticTexts["mvp.account.balance"], "R$ 837,00")
+        let versions = app.buttons["mvp.base.versions"]
+        show(app, versions)
+        tap(versions)
+
+        let corrected = app.descendants(matching: .any)["mvp.base.version.amount.correct_base"]
+        show(app, corrected)
+        XCTAssertEqual(corrected.value as? String, "R$ 910,00")
+        attachScreen(app, named: "I5: base corrigida em Dynamic Type máximo")
+
+        let suspension = app.staticTexts["mvp.base.version.suspend_base"]
+        show(app, suspension)
+        let original = app.descendants(matching: .any)["mvp.base.version.amount.original"]
+        show(app, original)
+        XCTAssertEqual(original.value as? String, "R$ 900,00")
+        attachScreen(app, named: "I5: base original em Dynamic Type máximo")
+        try app.performAccessibilityAudit(for: [.dynamicType, .sufficientElementDescription])
+    }
+
+#if compiler(>=6.4)
+    @MainActor
+    func testI5VoiceOverReadsCorrectedBalanceAndOriginalDifference() throws {
+        guard ProcessInfo.processInfo.environment["FINTECH_I5_VOICEOVER_TEST"] == "1", #available(iOS 27.0, *) else {
+            throw XCTSkip("Requires iOS 27 and the completed I5 HTTPS fixture.")
+        }
+        continueAfterFailure = false
+        let app = launchI5()
+        if !app.buttons["Sair"].waitForExistence(timeout: 2) {
+            signIn(app, email: "i5-a@example.test", password: "fictional i5 password")
+        }
+        waitForLabel(app.staticTexts["mvp.account.balance"], "R$ 837,00")
+        openChecks(app)
+        XCTAssertTrue(app.descendants(matching: .any)["mvp.check.currentBalance"].waitForExistence(timeout: 10))
+        let voiceOver = XCUIDevice.shared.voiceOverService
+        try voiceOver.enable()
+        defer { try? voiceOver.disable() }
+        var expected = [
+            ["Saldo calculado atual", "837"],
+            ["Data e hora da conferência"],
+            ["Divergência original", "mais", "45"],
+            ["Divergência restante no corte", "mais", "55"],
+        ]
+        var spoken: [String] = []
+        for _ in 0..<40 {
+            let utterance = try voiceOver.moveForward().utterance
+            spoken.append(utterance)
+            if let next = expected.first, next.allSatisfy({ utterance.localizedCaseInsensitiveContains($0) }) {
+                expected.removeFirst()
+                if expected.isEmpty { break }
+            }
+        }
+        let evidence = XCTAttachment(string: spoken.joined(separator: "\n"))
+        evidence.name = "I5 VoiceOver utterances"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+        XCTAssertTrue(expected.isEmpty, spoken.joined(separator: " | "))
+    }
+#endif
+
+    private var i5URL: URL { URL(string: "https://localhost:55465")! }
+
+    @MainActor
+    private func launchI5(maximumDynamicType: Bool = false) -> XCUIApplication {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-staging", "-mvp-account"]
+        if maximumDynamicType {
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        }
+        app.launchEnvironment["FINTECH_STAGING_BASE_URL"] = i5URL.absoluteString
+        app.launch()
+        return app
+    }
+
+    @MainActor
+    private func openBaseAction(_ app: XCUIApplication, _ action: String) {
+        let link = app.descendants(matching: .any).matching(identifier: "mvp.audit.open.\(action)").firstMatch
+        show(app, link)
+        tap(link)
+    }
+
+    private func i5Status(_ action: String) async throws -> String {
+        let (data, _) = try await URLSession.shared.data(from: i5URL.appending(path: "__i5/\(action)"))
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private func waitForI5Replay(_ expected: String) async throws {
+        for _ in 0..<40 {
+            if try await i5Status("replay") == expected { return }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        XCTFail("Expected fixture state \(expected)")
+    }
+
+    @MainActor
     func testI4CorrectionRecoversAfterRelaunchOverHTTPS() async throws {
         guard ProcessInfo.processInfo.environment["FINTECH_I4_HTTPS_TEST"] == "1" else {
             throw XCTSkip("Requires the disposable I4 HTTPS fixture.")
@@ -330,7 +567,7 @@ final class MvpAccountIntegrationTests: XCTestCase {
 
         openI4Movement(app, named: "Padaria I4")
         tap(app.buttons["mvp.audit.open.correct"])
-        typeI4Audit(app, amount: "24,00", reason: "Valor do comprovante")
+        typeAudit(app, amount: "24,00", reason: "Valor do comprovante")
         let projected = app.descendants(matching: .any)["mvp.audit.projectedBalance"]
         show(app, projected)
         XCTAssertEqual(projected.value as? String, "R$ 783,00")
@@ -372,7 +609,7 @@ final class MvpAccountIntegrationTests: XCTestCase {
         }
         XCTAssertTrue(replayed)
 
-        openI4Checks(app)
+        openChecks(app)
         let original = app.descendants(matching: .any)["mvp.check.originalDifference"]
         show(app, original)
         XCTAssertEqual(original.value as? String, "mais R$ 45,00")
@@ -395,7 +632,7 @@ final class MvpAccountIntegrationTests: XCTestCase {
         waitForLabel(app.staticTexts["mvp.account.balance"], "R$ 782,00")
         openI4Movement(app, named: "Despesa duplicada I4")
         tap(app.buttons["mvp.audit.open.invalidate"])
-        typeI4Audit(app, amount: nil, reason: "Lancamento duplicado")
+        typeAudit(app, amount: nil, reason: "Lancamento duplicado")
         let projected = app.descendants(matching: .any)["mvp.audit.projectedBalance"]
         show(app, projected)
         XCTAssertEqual(projected.value as? String, "R$ 802,00")
@@ -408,14 +645,14 @@ final class MvpAccountIntegrationTests: XCTestCase {
         tap(app.navigationBars.firstMatch.buttons.firstMatch)
         waitForLabel(app.staticTexts["mvp.account.balance"], "R$ 802,00")
 
-        openI4Checks(app)
+        openChecks(app)
         let remaining = app.descendants(matching: .any)["mvp.check.remainingDifference"]
         show(app, remaining)
         XCTAssertEqual(remaining.value as? String, "mais R$ 20,00")
         let replace = app.buttons.matching(identifier: "mvp.audit.open.replace_check").firstMatch
         show(app, replace)
         tap(replace)
-        typeI4Audit(app, amount: "819,00", reason: "Erro de digitacao")
+        typeAudit(app, amount: "819,00", reason: "Erro de digitacao")
         show(app, confirm)
         tap(confirm)
         let replaced = app.staticTexts["Conferência substituída"]
@@ -435,7 +672,7 @@ final class MvpAccountIntegrationTests: XCTestCase {
             signIn(app, email: "i4-a@example.test", password: "fictional i4 password")
         }
         waitForLabel(app.staticTexts["mvp.account.balance"], "R$ 783,00")
-        openI4Checks(app)
+        openChecks(app)
         XCTAssertTrue(app.descendants(matching: .any)["mvp.check.currentBalance"].waitForExistence(timeout: 10))
         let voiceOver = XCUIDevice.shared.voiceOverService
         try voiceOver.enable()
@@ -481,14 +718,14 @@ final class MvpAccountIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    private func openI4Checks(_ app: XCUIApplication) {
+    private func openChecks(_ app: XCUIApplication) {
         let checks = app.descendants(matching: .any).matching(identifier: "mvp.checks.open").firstMatch
         show(app, checks)
         tap(checks)
     }
 
     @MainActor
-    private func typeI4Audit(_ app: XCUIApplication, amount: String?, reason: String) {
+    private func typeAudit(_ app: XCUIApplication, amount: String?, reason: String) {
         if let amount {
             let field = app.textFields["mvp.audit.amount"]
             show(app, field)
