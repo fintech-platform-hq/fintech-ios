@@ -5,6 +5,7 @@ nonisolated struct MvpIntent: Codable, Equatable, Sendable {
     enum Operation: String, Codable, Sendable {
         case opening = "/mvp/account"
         case transaction = "/mvp/transactions"
+        case check = "/mvp/checks"
     }
 
     let environment: String
