@@ -27,7 +27,7 @@ struct MvpChecksView: View {
                 }
                 let zone = summary.base.flatMap { TimeZone(identifier: $0.referenceZone) } ?? .current
                 ForEach(entries) { entry in
-                    Section(entry.status == .open ? "Divergência em aberto" : "Valores coincidentes no corte") {
+                    Section(entry.status.title) {
                         MvpCheckValues(
                             reference: entry.receipt.referenceAt, zone: zone, observed: entry.receipt.observedMinor,
                             calculated: entry.receipt.originalCalculatedMinor, difference: entry.receipt.originalDifferenceMinor
@@ -35,6 +35,15 @@ struct MvpChecksView: View {
                         MvpCheckAmount("Saldo recalculado no corte", minor: entry.calculatedAtReferenceMinor)
                         MvpCheckAmount("Divergência restante no corte", minor: entry.remainingDifferenceMinor, showSign: true)
                             .accessibilityIdentifier("mvp.check.remainingDifference")
+                        if entry.canRecover, let base = summary.base {
+                            NavigationLink {
+                                MvpRecoveryView(model: model, entry: entry, base: base, zone: zone)
+                            } label: {
+                                Text("Investigar divergência")
+                            }
+                            .accessibilityIdentifier("mvp.recovery.open")
+                            .disabled(!model.canWrite)
+                        }
                     }
                 }
                 if entries.isEmpty && !loading && error == nil {
@@ -57,7 +66,7 @@ struct MvpChecksView: View {
         }
         .navigationTitle("Conferências e pendências")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: pendingOnly) { await load(pending: pendingOnly) }
+        .task(id: "\(pendingOnly)-\(model.recoveryReceipt?.id.uuidString ?? "")") { await load(pending: pendingOnly) }
         .refreshable { await load(pending: pendingOnly) }
     }
 

@@ -179,7 +179,7 @@ struct MvpAccountView: View {
 
     @ViewBuilder
     private var submissionStatus: some View {
-        let isPending = viewModel.hasPendingOpening || viewModel.hasPendingTransaction || viewModel.hasPendingCheck
+        let isPending = viewModel.hasPendingOpening || viewModel.hasPendingTransaction || viewModel.hasPendingCheck || viewModel.hasPendingRecovery
         if isPending || viewModel.message != nil || viewModel.confirmedID != nil {
             Section("Envio") {
                 if isPending {
@@ -220,7 +220,11 @@ struct MvpAccountView: View {
                         ? "+\(MvpAccountViewModel.money(entry.amountMinor))"
                         : MvpAccountViewModel.money("-\(entry.amountMinor)"))
                         .monospacedDigit()
-                    Text(dateLabel(entry.occurredAt, in: zone))
+                    if let day = entry.occurrenceDay {
+                        Text("Dia \(day), sem hora informada")
+                    } else {
+                        Text(dateLabel(entry.occurredAt, in: zone))
+                    }
                     if let description = entry.description { Text(description) }
                     switch entry.coverage {
                     case .covered: EmptyView()

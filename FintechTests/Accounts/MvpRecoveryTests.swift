@@ -177,6 +177,100 @@ struct MvpRecoveryTests {
         #expect(try await reopened.load(environment: intent.environment, principalID: a) == nil)
     }
 
+    @Test(arguments: [false, true])
+    func expenseRecoveryResumesOnlyForTheSamePrincipal(expireSession: Bool) async throws {
+        let fixture = RecoveryFixture()
+        defer { fixture.cleanUp() }
+        fixture.install(firstFailure: expireSession ? nil : .timedOut, expireFirstSession: expireSession, recoveringExpense: true)
+        let a = try await fixture.model(token: "a")
+        await a.load()
+        let confirmation = expenseConfirmation()
+        await a.confirmRecovery(confirmation)
+        #expect(a.hasPendingRecovery)
+        #expect(a.recoveryReceipt == nil)
+        #expect(!a.canWrite)
+
+        let b = try await fixture.model(token: "b")
+        await b.load(recover: true)
+        #expect(!b.hasPendingRecovery)
+        #expect(b.recoveryReceipt == nil)
+        #expect(fixture.posts.withLock { $0.count } == 1)
+
+        let restarted = try await fixture.model(token: "a")
+        await restarted.load(recover: true)
+        #expect(!restarted.hasPendingRecovery)
+        #expect(restarted.recoveryReceipt?.checkId == RecoveryFixture.checkID)
+        let posts = fixture.posts.withLock { $0 }
+        try #require(posts.count == 2)
+        #expect(posts[0].httpBody == posts[1].httpBody)
+        #expect(posts[0].value(forHTTPHeaderField: "Idempotency-Key") == posts[1].value(forHTTPHeaderField: "Idempotency-Key"))
+        #expect(posts.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer a" })
+        let bytes = try #require(posts[0].httpBody)
+        let fields = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        #expect(fields["occurredAt"] == nil)
+        #expect(fields["day"] as? String == "2026-11-15")
+        #expect(fields["action"] as? String == "create")
+        #expect(fields["expectedRevision"] as? String == "1")
+    }
+
+    @Test
+    func storageFailurePreventsTransmissionAndRestartRecoversUnsentIntent() async throws {
+        let fixture = RecoveryFixture()
+        defer { fixture.cleanUp() }
+        fixture.install(recoveringExpense: true)
+        let a = try await fixture.model(token: "a")
+        await a.load()
+        let confirmation = expenseConfirmation()
+        try Data("fictitious blocked directory".utf8).write(to: fixture.root)
+        await a.confirmRecovery(confirmation)
+        #expect(fixture.posts.withLock { $0.isEmpty })
+        #expect(a.message?.contains("Nenhum envio foi iniciado") == true)
+        try FileManager.default.removeItem(at: fixture.root)
+
+        let intent = MvpIntent(
+            environment: fixture.baseURL.absoluteString, principalID: RecoveryFixture.principalA,
+            accountID: RecoveryFixture.accountID, operation: .recovery, key: UUID(),
+            body: try APIClient.freeze(confirmation)
+        )
+        try await MvpIntentStore(root: fixture.root).save(intent)
+        #expect(fixture.posts.withLock { $0.isEmpty })
+        let b = try await fixture.model(token: "b")
+        await b.load(recover: true)
+        #expect(!b.hasPendingRecovery)
+        #expect(fixture.posts.withLock { $0.isEmpty })
+
+        let restarted = try await fixture.model(token: "a")
+        await restarted.load(recover: true)
+        #expect(restarted.recoveryReceipt?.checkId == RecoveryFixture.checkID)
+        let posts = fixture.posts.withLock { $0 }
+        try #require(posts.count == 1)
+        #expect(posts[0].httpBody == intent.body)
+        #expect(posts[0].value(forHTTPHeaderField: "Idempotency-Key") == intent.key.uuidString)
+    }
+
+    @Test
+    func civilDayAndRepeatedClockUseAccountZone() throws {
+        let zone = try #require(TimeZone(identifier: "America/New_York"))
+        let formatter = ISO8601DateFormatter()
+        let spring = try #require(formatter.date(from: "2026-03-08T12:00:00Z"))
+        let fall = try #require(formatter.date(from: "2026-11-01T12:00:00Z"))
+        #expect(MvpRecoveryTime.day(spring, in: zone) == "2026-03-08")
+        #expect(MvpRecoveryTime.instants(for: "02:30", on: spring, in: zone).isEmpty)
+        let repeated = MvpRecoveryTime.instants(for: "01:30:00", on: fall, in: zone)
+        #expect(repeated.map { formatter.string(from: $0) } == ["2026-11-01T05:30:00Z", "2026-11-01T06:30:00Z"])
+        #expect(repeated.map { MvpRecoveryTime.offset($0, in: zone) } == ["UTC−04:00", "UTC−05:00"])
+        #expect(MvpRecoveryTime.instants(for: "01:60", on: fall, in: zone).isEmpty)
+    }
+
+    private func expenseConfirmation() -> MvpRecoveryConfirmation {
+        MvpRecoveryConfirmation(
+            input: MvpRecoveryInput(accountId: RecoveryFixture.accountID, checkId: RecoveryFixture.checkID,
+                                    amountMinor: "2500", day: "2026-11-15", occurredAt: nil,
+                                    description: "Padaria", externalSource: nil, externalReference: nil),
+            expectedRevision: "1", action: .create, transactionId: nil, evidence: "Comprovante"
+        )
+    }
+
     private func openForm(_ model: MvpAccountViewModel) -> CreateTransactionViewModel? {
         model.startTransaction()
         model.transactionForm?.updateAmountDigits("5500")
@@ -186,6 +280,7 @@ struct MvpRecoveryTests {
 
 private nonisolated final class RecoveryFixture: Sendable {
     static let accountID = UUID(uuidString: "f10f00d2-1f56-4df2-9954-a265950ee2c2")!
+    static let checkID = UUID(uuidString: "8b5e65d2-2c95-45fb-81f0-3f63dd778a10")!
     static let transactionID = UUID(uuidString: "d1b67397-a4f5-4338-b733-93f8f214e6a6")!
     static let principalA = UUID(uuidString: "00c7b06c-a57b-491d-8f50-3b6574dfbe76")!
     static let principalB = UUID(uuidString: "46c46c22-e57c-45de-9d86-64ca17c5fdad")!
@@ -197,9 +292,9 @@ private nonisolated final class RecoveryFixture: Sendable {
 
     func install(
         firstFailure: URLError.Code? = nil, expireFirstSession: Bool = false,
-        checkingBalance: Bool = false, rejectFirstCheck: Bool = false
+        checkingBalance: Bool = false, rejectFirstCheck: Bool = false, recoveringExpense: Bool = false
     ) {
-        let writePath = checkingBalance ? "/mvp/checks" : "/mvp/transactions"
+        let writePath = recoveringExpense ? "/mvp/recoveries" : (checkingBalance ? "/mvp/checks" : "/mvp/transactions")
         URLProtocolStub.install(for: baseURL) { request in
             let url = try #require(request.url)
             if url.path == writePath {
@@ -212,7 +307,11 @@ private nonisolated final class RecoveryFixture: Sendable {
                     }
                 }
                 self.completed.withLock { $0 = true }
-                return try self.response(url, status: 201, json: checkingBalance ? Self.checkReceipt : Self.receipt)
+                let receipt = recoveringExpense ? """
+                    {"id":"\(Self.transactionID)","accountId":"\(Self.accountID)","checkId":"\(Self.checkID)",
+                    "transactionId":"\(Self.transactionID)"}
+                    """ : (checkingBalance ? Self.checkReceipt : Self.receipt)
+                return try self.response(url, status: 201, json: receipt)
             }
             if url.path == "/mvp/check-previews" {
                 let revision = rejectFirstCheck && self.posts.withLock({ !$0.isEmpty }) ? "2" : "1"
