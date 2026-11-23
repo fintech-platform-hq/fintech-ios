@@ -40,7 +40,18 @@ nonisolated struct MvpCheckReceipt: Decodable, Sendable {
 
 nonisolated struct MvpCheckEntry: Decodable, Identifiable, Sendable {
     enum Status: String, Decodable, Sendable {
-        case open, coincident
+        case open, coincident, resolved
+        case partiallyExplained = "partially_explained"
+
+        var title: String {
+            switch self {
+            case .open: "Divergência em aberto"
+            case .coincident: "Valores coincidentes no corte"
+            case .partiallyExplained: "Divergência parcialmente explicada"
+            case .resolved: "Resolvida por lançamentos identificados"
+            }
+        }
+
     }
 
     let receipt: MvpCheckReceipt
@@ -48,17 +59,22 @@ nonisolated struct MvpCheckEntry: Decodable, Identifiable, Sendable {
     let remainingDifferenceMinor: String
     let status: Status
     var id: UUID { receipt.id }
+    var canRecover: Bool {
+        status == .open || status == .partiallyExplained
+            || (status == .coincident && receipt.originalDifferenceMinor != "0")
+    }
 
     init(from decoder: any Decoder) throws {
         receipt = try MvpCheckReceipt(from: decoder)
         let fields = try decoder.container(keyedBy: CodingKeys.self)
         calculatedAtReferenceMinor = try fields.decode(String.self, forKey: .calculatedAtReferenceMinor)
         remainingDifferenceMinor = try fields.decode(String.self, forKey: .remainingDifferenceMinor)
-        status = try fields.decode(Status.self, forKey: .status)
+        status = try fields.decodeIfPresent(Status.self, forKey: .resolutionStatus)
+            ?? fields.decode(Status.self, forKey: .status)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case calculatedAtReferenceMinor, remainingDifferenceMinor, status
+        case calculatedAtReferenceMinor, remainingDifferenceMinor, status, resolutionStatus
     }
 }
 

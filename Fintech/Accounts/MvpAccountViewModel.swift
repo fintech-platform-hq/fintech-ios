@@ -23,6 +23,7 @@ final class MvpAccountViewModel {
     private(set) var state: State = .loading
     private(set) var preview: MvpOpening?
     private(set) var checkPreview: MvpCheckPreview?
+    private(set) var recoveryReceipt: MvpRecoveryReceipt?
     private(set) var checkReceipt: MvpCheckReceipt?
     private(set) var entries: [MvpHistoryEntry] = []
     private(set) var nextCursor: String?
@@ -33,6 +34,7 @@ final class MvpAccountViewModel {
 
     var hasPendingOpening: Bool { pending?.operation == .opening }
     var hasPendingTransaction: Bool { pending?.operation == .transaction }
+    var hasPendingRecovery: Bool { pending?.operation == .recovery }
     var hasPendingCheck: Bool { pending?.operation == .check }
     var canWrite: Bool { storageReady && pending == nil && !busy }
 
@@ -180,6 +182,8 @@ final class MvpAccountViewModel {
             checkPreview = result
         } catch is CancellationError {
             return
+        } catch APIError.mvpConflict(code: "OCCURRENCE_TIME_REQUIRED") {
+            message = "Um lançamento informado só por dia torna esse horário ambíguo. Escolha outro corte."
         } catch APIError.badRequest {
             message = "Escolha uma data e hora entre o início da cobertura e agora."
         } catch {
@@ -213,6 +217,43 @@ final class MvpAccountViewModel {
         try await identify(page.summary, generation: generation)
         guard page.summary.account?.id == accountID else { throw APIError.invalidResponse }
         return page
+    }
+
+    func previewRecovery(_ input: MvpRecoveryInput) async throws -> MvpRecoveryPreview {
+        guard let generation else { throw CancellationError() }
+        let preview = try await service.previewRecovery(input, generation: generation)
+        try await checkSession(generation)
+        guard preview.accountId == input.accountId, preview.checkId == input.checkId else {
+            throw APIError.invalidResponse
+        }
+        return preview
+    }
+
+    func loadRecoveryHistory(accountID: UUID, cursor: String?, revision: String) async throws -> MvpHistoryPage {
+        guard let generation else { throw CancellationError() }
+        let page = try await service.history(accountID: accountID, cursor: cursor, generation: generation)
+        try await identify(page.summary, generation: generation)
+        guard page.summary.account?.id == accountID else { throw APIError.invalidResponse }
+        guard page.summary.revision == revision else { throw APIError.mvpConflict(code: "STALE_REVISION") }
+        return page
+    }
+
+    func confirmRecovery(_ confirmation: MvpRecoveryConfirmation) async {
+        guard canWrite, let generation, let principalID else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let intent = MvpIntent(
+                environment: service.environmentID, principalID: principalID, accountID: confirmation.input.accountId,
+                operation: .recovery, key: UUID(), body: try APIClient.freeze(confirmation)
+            )
+            try await persist(intent, generation: generation)
+            await resolve(intent, generation: generation)
+        } catch is CancellationError {
+            return
+        } catch {
+            message = "Não foi possível proteger a recuperação no dispositivo. Nenhum envio foi iniciado."
+        }
     }
 
     func startTransaction() {
@@ -321,6 +362,7 @@ final class MvpAccountViewModel {
 
             let transaction: TransactionResponse?
             let check: MvpCheckReceipt?
+            var recovery: MvpRecoveryReceipt?
             let confirmation: String
             switch intent.operation {
             case .opening:
@@ -342,24 +384,45 @@ final class MvpAccountViewModel {
                 transaction = nil
                 check = receipt
                 confirmation = "Conferência confirmada. Você já pode registrar um lançamento."
+            case .recovery:
+                let receipt: MvpRecoveryReceipt = try await service.send(intent, generation: generation, canSend: canSend)
+                guard receipt.accountId == intent.accountID else { throw APIError.invalidResponse }
+                transaction = nil
+                check = nil
+                recovery = receipt
+                confirmation = "Recuperação confirmada. A conferência foi atualizada."
             }
 
             try await finish(intent, generation: generation)
             confirmedID = transaction?.id
             checkReceipt = check
+            if let recovery { recoveryReceipt = recovery }
             message = confirmation
             selectedAccountID = nil
             _ = await read(generation: generation)
             return transaction
         } catch is CancellationError {
             return nil
-        } catch APIError.badRequest, APIError.http(statusCode: 404, message: _),
-                APIError.mvpConflict(code: "STALE_REVISION"), APIError.mvpConflict(code: "BASE_REQUIRED"),
-                APIError.mvpConflict(code: "MVP_ACCOUNT_EXISTS"), APIError.mvpConflict(code: "LEGACY_ADOPTION_BLOCKED") {
+        } catch let failure as APIError where Self.isDefinitiveRejection(failure) {
             do {
                 try await finish(intent, generation: generation)
                 _ = await read(generation: generation)
-                if intent.operation == .check {
+                if intent.operation == .recovery {
+                    switch failure {
+                    case APIError.mvpConflict(code: "EXTERNAL_REFERENCE_CONFLICT"):
+                        message = "A referência externa já está vinculada a outra recuperação. Revise os dados."
+                    case APIError.mvpConflict(code: "OCCURRENCE_TIME_REQUIRED"):
+                        message = "Informe a hora da despesa ou adie a recuperação."
+                    case APIError.mvpConflict(code: "MOVEMENT_ALREADY_LINKED"):
+                        message = "Esse lançamento já está vinculado a esta conferência."
+                    case APIError.mvpConflict(code: "MOVEMENT_INELIGIBLE"):
+                        message = "Esse lançamento não faz parte do saldo no corte da conferência."
+                    default:
+                        message = "A recuperação precisa de uma nova prévia. Revise os dados e tente novamente."
+                    }
+                } else if intent.operation == .check && failure == .mvpConflict(code: "OCCURRENCE_TIME_REQUIRED") {
+                    message = "Um lançamento informado só por dia torna esse horário ambíguo. Escolha outro corte."
+                } else if intent.operation == .check {
                     message = "A conferência não foi confirmada. Revise novamente o valor, a data e a hora."
                 } else {
                     message = "O envio foi recusado. Confira a conta, a data e os dados antes de tentar novamente."
@@ -375,6 +438,20 @@ final class MvpAccountViewModel {
             message = "A confirmação está pendente. Tente recuperar o mesmo envio."
         }
         return nil
+    }
+
+    private static func isDefinitiveRejection(_ failure: APIError) -> Bool {
+        switch failure {
+        case .badRequest, .http(statusCode: 404, message: _),
+                .mvpConflict(code: "STALE_REVISION"), .mvpConflict(code: "BASE_REQUIRED"),
+                .mvpConflict(code: "MVP_ACCOUNT_EXISTS"), .mvpConflict(code: "LEGACY_ADOPTION_BLOCKED"),
+                .mvpConflict(code: "OCCURRENCE_TIME_REQUIRED"),
+                .mvpConflict(code: "EXTERNAL_REFERENCE_CONFLICT"),
+                .mvpConflict(code: "MOVEMENT_ALREADY_LINKED"), .mvpConflict(code: "MOVEMENT_INELIGIBLE"):
+            true
+        default:
+            false
+        }
     }
 
     private func finish(_ intent: MvpIntent, generation: Int) async throws {

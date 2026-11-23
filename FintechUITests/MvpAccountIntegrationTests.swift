@@ -198,6 +198,223 @@ final class MvpAccountIntegrationTests: XCTestCase {
         XCTAssertNotNil(UUID(uuidString: coffeeID.label))
     }
 
+    @MainActor
+    func testI3ReviewsLinksDefersAndRecoversConfirmedExpenseOverHTTPS() async throws {
+        guard ProcessInfo.processInfo.environment["FINTECH_I3_HTTPS_TEST"] == "1" else {
+            throw XCTSkip("Requires the disposable I3 HTTPS fixture.")
+        }
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        let baseURL = "https://localhost:55448"
+        app.launchArguments = ["-staging", "-mvp-account"]
+        app.launchEnvironment["FINTECH_STAGING_BASE_URL"] = baseURL
+        app.launch()
+        if app.buttons["Sair"].waitForExistence(timeout: 2) { tap(app.buttons["Sair"]) }
+        signIn(app, email: "i3-a@example.test", password: "fictional i3 password")
+
+        let balance = app.staticTexts["mvp.account.balance"]
+        waitForLabel(balance, "R$ 827,00")
+        let standardBalanceHeight = balance.frame.height
+        let checks = app.descendants(matching: .any).matching(identifier: "mvp.checks.open").firstMatch
+        show(app, checks)
+        tap(checks)
+
+        openRecovery(app)
+        enterRecovery(app, amount: "55,00", time: "")
+        let error = app.staticTexts["mvp.recovery.error"]
+        show(app, error)
+        XCTAssertTrue(error.label.contains("Tente novamente"))
+        let preview = app.buttons["mvp.recovery.preview"]
+        show(app, preview)
+        tap(preview)
+        let candidate = app.buttons.matching(identifier: "mvp.recovery.candidate").firstMatch
+        show(app, candidate)
+        XCTAssertTrue(candidate.label.contains("Despesa anterior"))
+        let deferAction = app.buttons["mvp.recovery.defer"]
+        show(app, deferAction)
+        tap(deferAction)
+        let current = app.descendants(matching: .any)["mvp.check.currentBalance"]
+        show(app, current)
+        XCTAssertEqual(current.value as? String, "R$ 827,00")
+        let deferredRequestCount = try await recoveryRequestCount(baseURL)
+        XCTAssertEqual(deferredRequestCount, "0")
+
+        openRecovery(app)
+        enterRecovery(app, amount: "54,00", time: "")
+        let history = app.buttons["mvp.recovery.history"]
+        show(app, history)
+        tap(history)
+        let historicalExpense = app.buttons.matching(identifier: "mvp.recovery.historyMovement").firstMatch
+        show(app, historicalExpense)
+        XCTAssertTrue(historicalExpense.label.contains("Despesa anterior"))
+        tap(historicalExpense)
+        typeRecoveryEvidence(app, "Despesa conferida no histórico")
+        let link = app.buttons["mvp.recovery.link"]
+        show(app, link)
+        tap(link)
+        tap(app.buttons["Confirmar vínculo"])
+        show(app, current)
+        XCTAssertEqual(current.value as? String, "R$ 827,00")
+
+        openRecovery(app)
+        enterRecovery(app, amount: "25,00", time: "08:00:00")
+        typeRecoveryEvidence(app, "Comprovante de padaria")
+        confirmDistinctRecovery(app)
+        let retry = app.buttons["mvp.recovery.retry"]
+        show(app, retry)
+        attachScreen(app, named: "Recuperação com resposta HTTPS interrompida")
+        app.terminate()
+        app.launch()
+        let stored = app.staticTexts["mvp.intent.pending"]
+        show(app, stored)
+        let beforeSwitch = try await recoveryRequestCount(baseURL)
+        tap(app.buttons["Sair"])
+        signIn(app, email: "i3-b@example.test", password: "fictional i3 password")
+        XCTAssertTrue(app.buttons["Abrir conta pessoal em reais"].waitForExistence(timeout: 10))
+        XCTAssertFalse(stored.exists)
+        XCTAssertFalse(balance.exists)
+        let afterSwitch = try await recoveryRequestCount(baseURL)
+        XCTAssertEqual(beforeSwitch, afterSwitch)
+        tap(app.buttons["Sair"])
+
+        var release = URLRequest(url: try XCTUnwrap(URL(string: baseURL + "/__i3/release")))
+        release.httpMethod = "POST"
+        let (_, response) = try await URLSession.shared.data(for: release)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 204)
+        signIn(app, email: "i3-a@example.test", password: "fictional i3 password")
+        waitForLabel(balance, "R$ 802,00")
+        XCTAssertFalse(stored.exists)
+        show(app, checks)
+        tap(checks)
+        let remaining = app.descendants(matching: .any)["mvp.check.remainingDifference"]
+        show(app, remaining)
+        XCTAssertEqual(remaining.value as? String, "mais R$ 20,00")
+        openRecovery(app)
+        enterRecovery(app, amount: "20,00", time: "08:10:00")
+        typeRecoveryEvidence(app, "Outro comprovante identificado")
+        confirmDistinctRecovery(app)
+        show(app, remaining)
+        XCTAssertEqual(remaining.value as? String, "R$ 0,00")
+        let original = app.descendants(matching: .any)["mvp.check.originalDifference"]
+        show(app, original)
+        XCTAssertEqual(original.value as? String, "mais R$ 45,00")
+        XCTAssertEqual(current.value as? String, "R$ 782,00")
+        XCTAssertTrue(app.staticTexts["Resolvida por lançamentos identificados"].exists)
+
+        app.terminate()
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        waitForLabel(balance, "R$ 782,00")
+        XCTAssertGreaterThan(balance.frame.height, standardBalanceHeight)
+        show(app, checks)
+        tap(checks)
+        show(app, remaining)
+        XCTAssertEqual(remaining.value as? String, "R$ 0,00")
+        try app.performAccessibilityAudit(for: [.dynamicType, .sufficientElementDescription])
+        attachScreen(app, named: "Conferência resolvida com Dynamic Type máximo")
+    }
+
+    @MainActor
+    private func openRecovery(_ app: XCUIApplication) {
+        let recovery = app.descendants(matching: .any).matching(identifier: "mvp.recovery.open").firstMatch
+        show(app, recovery)
+        tap(recovery)
+    }
+
+    @MainActor
+    private func enterRecovery(_ app: XCUIApplication, amount: String, time: String) {
+        let value = app.textFields["mvp.recovery.amount"]
+        show(app, value)
+        if let previous = value.value as? String, previous != "Valor em reais", !previous.isEmpty {
+            tap(value)
+            value.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count))
+        }
+        tap(value)
+        value.typeText(amount)
+        if !time.isEmpty {
+            let hour = app.textFields["mvp.recovery.time"]
+            show(app, hour)
+            tap(hour)
+            hour.typeText(time)
+        }
+        let preview = app.buttons["mvp.recovery.preview"]
+        show(app, preview)
+        tap(preview)
+    }
+
+    @MainActor
+    private func typeRecoveryEvidence(_ app: XCUIApplication, _ text: String) {
+        let evidence = app.descendants(matching: .any).matching(identifier: "mvp.recovery.evidence").firstMatch
+        show(app, evidence)
+        tap(evidence)
+        evidence.typeText(text)
+    }
+
+    @MainActor
+    private func confirmDistinctRecovery(_ app: XCUIApplication) {
+        let create = app.buttons["mvp.recovery.create"]
+        show(app, create)
+        tap(create)
+        tap(app.buttons["Confirmar despesa distinta"])
+    }
+
+    private func recoveryRequestCount(_ baseURL: String) async throws -> String {
+        let (data, response) = try await URLSession.shared.data(from: XCTUnwrap(URL(string: baseURL + "/__i3/count")))
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+#if compiler(>=6.4)
+    @MainActor
+    func testI3VoiceOverReadsResolutionAndPreservedDifference() throws {
+        guard ProcessInfo.processInfo.environment["FINTECH_I3_VOICEOVER_TEST"] == "1", #available(iOS 27.0, *) else {
+            throw XCTSkip("Requires iOS 27 and the completed S03 fixture.")
+        }
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-staging", "-mvp-account"]
+        app.launchEnvironment["FINTECH_STAGING_BASE_URL"] = "https://localhost:55448"
+        app.launch()
+        if !app.buttons["Sair"].waitForExistence(timeout: 2) {
+            signIn(app, email: "i3-a@example.test", password: "fictional i3 password")
+        }
+        waitForLabel(app.staticTexts["mvp.account.balance"], "R$ 782,00")
+        let checks = app.descendants(matching: .any).matching(identifier: "mvp.checks.open").firstMatch
+        attachScreen(app, named: "Conta antes de abrir a conferência no iOS 27")
+        tap(checks)
+        XCTAssertTrue(app.descendants(matching: .any)["mvp.check.currentBalance"].waitForExistence(timeout: 10))
+
+        let voiceOver = XCUIDevice.shared.voiceOverService
+        try voiceOver.enable()
+        defer { try? voiceOver.disable() }
+        XCTAssertTrue(voiceOver.isEnabled)
+        let expected = [
+            ["Saldo calculado atual", "782"],
+            ["Resolvida por lançamentos identificados"],
+            ["Valor informado", "800"],
+            ["Divergência original", "mais", "45"],
+            ["Divergência restante no corte", "0"],
+        ]
+        var spoken: [String] = []
+        var next = 0
+        for _ in 0..<35 {
+            let speech = try voiceOver.moveForward().utterance
+            spoken.append(speech)
+            if expected[next].allSatisfy({ speech.localizedCaseInsensitiveContains($0) }) {
+                next += 1
+                if next == expected.count { break }
+            }
+        }
+        let evidence = XCTAttachment(string: spoken.joined(separator: "\n"))
+        evidence.name = "I3 VoiceOver utterances"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+        XCTAssertEqual(next, expected.count, spoken.joined(separator: " | "))
+    }
+#endif
+
 #if compiler(>=6.4)
     @MainActor
     func testI2VoiceOverReadsTheCutAndSeparateBalances() throws {

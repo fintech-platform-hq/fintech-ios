@@ -53,6 +53,7 @@ nonisolated struct MvpHistoryEntry: Decodable, Identifiable, Sendable {
     let amountMinor: String
     let description: String?
     let occurredAt: Date
+    let occurrenceDay: String?
     let coverage: Coverage
 }
 
@@ -130,6 +131,13 @@ nonisolated struct MvpAccountService: Sendable {
         }
         return try await apiClient.get(
             path: "/mvp/account/\(accountID.uuidString)/checks", expectedGeneration: generation, queryItems: query
+        )
+    }
+
+    func previewRecovery(_ input: MvpRecoveryInput, generation: Int) async throws -> MvpRecoveryPreview {
+        try await apiClient.post(
+            path: "/mvp/recovery-previews", body: input, headers: [:],
+            expectedStatusCode: 200, expectedGeneration: generation
         )
     }
 
