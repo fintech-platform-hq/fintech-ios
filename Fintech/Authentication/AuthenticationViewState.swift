@@ -35,8 +35,8 @@ nonisolated enum AppleLinkDisplayError: Equatable, Sendable {
 
     var message: String {
         switch self {
-        case .notConfirmed: "O vínculo não pôde ser confirmado. Uma nova tentativa exige uma nova autorização Apple. Sua sessão Fintech foi preservada."
-        case .passwordRequired: "Entre novamente com email e senha antes de tentar vincular. Sua sessão Fintech foi preservada."
+        case .notConfirmed: "O vínculo não pôde ser confirmado. Uma nova tentativa exige uma nova autorização Apple. Sua sessão Lenver foi preservada."
+        case .passwordRequired: "Entre novamente com email e senha antes de tentar vincular. Sua sessão Lenver foi preservada."
         case .conflict: "Há um conflito de vínculo. Nenhuma conta será mesclada."
         case .tooManyAttempts: "Excesso de tentativas. Aguarde antes de iniciar uma nova autorização Apple."
         case .unavailable: "O vínculo está temporariamente indisponível. Tente mais tarde com uma nova autorização Apple."

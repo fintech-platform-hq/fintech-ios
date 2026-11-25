@@ -1,5 +1,7 @@
 # Transaction Networking Specification
 
+> Historical networking specification from July 2026. For the current API and authentication behavior, use the [Lenver OpenAPI contract](https://github.com/lenver-hq/lenver-backend/blob/main/openapi.yaml) and the [shared transaction notes](https://github.com/lenver-hq/lenver-docs/blob/main/api/transactions.md).
+
 Status: client contract updated; production deployment must match before live use
 
 Last source inspection: 2026-07-31

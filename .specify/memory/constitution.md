@@ -8,7 +8,7 @@ Sync Impact Report
 - Removed sections: none
 - Follow-up TODOs: none
 -->
-# Fintech iOS Constitution
+# Lenver iOS Constitution
 
 ## Core Principles
 
