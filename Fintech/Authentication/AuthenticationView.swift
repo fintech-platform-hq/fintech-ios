@@ -16,7 +16,7 @@ struct AuthenticationView: View {
         switch viewModel.linkingState {
         case .authorizing: return "Aguardando autorização Apple…"
         case .submitting: return "Vinculando conta Apple…"
-        case .success: return "Conta Apple vinculada com sucesso. Sua sessão Fintech foi mantida."
+        case .success: return "Conta Apple vinculada com sucesso. Sua sessão Lenver foi mantida."
         case let .failure(_, error): return error.message
         default:
             if case let .failure(error) = viewModel.state { return error.message }
@@ -33,7 +33,7 @@ struct AuthenticationView: View {
             Form {
                 if passwordRequired {
                     Section {
-                        Text("Já existe uma conta Fintech. Entre com email e senha para continuar. Depois, você poderá escolher se deseja vincular sua identidade Apple.")
+                        Text("Já existe uma conta Lenver. Entre com email e senha para continuar. Depois, você poderá escolher se deseja vincular sua identidade Apple.")
                         Button("Agora não") { viewModel.dismissAppleLinkOffer() }
                     }
                 }
@@ -100,7 +100,7 @@ struct AuthenticationView: View {
                         .accessibilityIdentifier("authenticationFeedback")
                 }
             }
-            .navigationTitle("Fintech")
+            .navigationTitle("Lenver")
             .onChange(of: feedback) { _, value in
                 // One focus change per distinct feedback transition; no repeated announcements.
                 focusedFeedback = value

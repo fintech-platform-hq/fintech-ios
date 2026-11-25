@@ -1,5 +1,7 @@
 # Fintech Project Context Handover
 
+> Historical handover from August 2026. The local paths, authentication status, and setup below describe that checkpoint. For current navigation, start with the [Lenver iOS README](../README.md) and the [engineering guide](../AGENTS.md).
+
 Updated: 2026-08-17
 
 This file is a safe starting point for a new Codex/ChatGPT account. It captures

@@ -1,8 +1,8 @@
-# Fintech iOS Engineering Guide
+# Lenver iOS Engineering Guide
 
 ## Project purpose
 
-Fintech is the native iOS client for a fintech platform. The app must treat the backend as the source of truth for financial writes and must make retry behavior explicit so that a transient network failure cannot create duplicate transactions.
+Lenver is a native iOS client for personal finance. The app must treat the backend as the source of truth for financial writes and must make retry behavior explicit so that a transient network failure cannot create duplicate transactions.
 
 ## Detected platform and toolchain
 
@@ -27,12 +27,12 @@ Treat the project settings as authoritative if these values change.
 
 ## Architectural boundaries
 
-- Keep the initial networking feature focused on `APIClient`, `APIError`, transaction request/response models, and a transaction-specific service boundary.
+- Keep HTTP transport in `APIClient` and feature requests in their respective services.
 - Use Foundation's `URLSession`, `Codable`, and Swift `async`/`await`. Do not add third-party dependencies or build a generic networking framework.
 - SwiftUI views render state and initiate injected actions. They must never construct requests or perform live networking directly in a view body.
 - Keep transport concerns, transaction endpoint behavior, and UI state in separate types.
 - The backend is the source of truth for confirmed financial operations. Do not infer database readiness from `GET /health`; it is currently a process-level liveness response only.
-- Do not add authentication until the backend enforces it and the approved API contract defines it.
+- Model authentication against the enforced backend contract.
 
 ## Dependency injection
 
@@ -69,10 +69,9 @@ Treat the project settings as authoritative if these values change.
 
 - Unit tests must use controlled URL loading and must never depend on the production API.
 - Production API integration or smoke tests must be opt-in, separately invoked, and guarded by an explicit environment flag. They must never run from the default test plan, `scripts/verify.sh`, or routine CI.
-- Before handing off a change, run:
+- Before handing off a change, build and run the applicable tests using a disposable simulator. The existing `scripts/verify.sh` automatically selects and erases a simulator. Use Xcode or `xcodebuild` with an explicit disposable destination to preserve existing data. Then run:
 
 ```sh
-./scripts/verify.sh
 git diff --check
 git status --short
 ```
