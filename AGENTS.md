@@ -6,10 +6,10 @@ Lenver is a native iOS client for personal finance. The app must treat the backe
 
 ## Detected platform and toolchain
 
-- Xcode project: `Fintech.xcodeproj`
-- Application target: `Fintech`
-- Unit-test target: `FintechTests`
-- UI-test target: `FintechUITests`
+- Xcode project: `Lenver.xcodeproj`
+- Application target: `Lenver`
+- Unit-test target: `LenverTests`
+- UI-test target: `LenverUITests`
 - Supported platform: iOS and iPadOS, deployment target 26.5
 - Swift language mode: Swift 5 (`SWIFT_VERSION = 5.0`)
 - Detected toolchain: Xcode 26.6 with Apple Swift 6.3.3
